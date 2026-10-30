@@ -42,6 +42,7 @@ pub mod java_text;
 pub mod level_loading;
 pub mod light;
 pub mod lod;
+pub mod lod_cache;
 pub mod logging;
 pub mod menu_blur;
 pub mod mesher;

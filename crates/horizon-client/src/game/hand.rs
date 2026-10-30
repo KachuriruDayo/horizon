@@ -182,7 +182,7 @@ impl Game<'_> {
             speed /= 5.0;
         }
         let harvest = !facts.requires_tool || self.items().correct_for_drops(held, &facts.name);
-        speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
+        speed / facts.hardness / if harvest { 30.0 } else { 100.0 } * self.dig_scale(pos)
     }
     /// A key for the main-hand stack (`destroyingItem`): its item and components.
     pub(super) fn main_hand_key(&self) -> String {

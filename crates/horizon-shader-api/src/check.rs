@@ -71,6 +71,8 @@ pub struct CheckedStage {
 #[derive(Debug)]
 pub struct Report {
     pub stages: Vec<CheckedStage>,
+    /// The shadow map the pack asks the renderer to draw.
+    pub shadow: Option<crate::manifest::Shadow>,
 }
 
 /// Checks every stage of `pack`, and that each option is an `override` of
@@ -115,7 +117,10 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
         }
     }
     if problems.is_empty() {
-        Ok(Report { stages: checked })
+        Ok(Report {
+            stages: checked,
+            shadow: m.shadow.clone(),
+        })
     } else {
         Err(problems)
     }

@@ -321,6 +321,23 @@ pub fn update_region_tag_to(root: Ty, tag: &mut Tag, to: i32) {
     dynamic::set(tag, "DataVersion", Tag::Int(to));
 }
 
+/// `StructureTemplateManager.readStructure`: a structure template's NBT of an older DataVersion
+/// (500 when it has none) brought up to the game's: block names and properties flattened,
+/// block entities' and entities' data converted, as for a chunk.
+pub fn update_structure(tag: &mut Tag) {
+    update_structure_to(tag, CURRENT);
+}
+
+/// [`update_structure`] up to an older DataVersion.
+pub fn update_structure_to(tag: &mut Tag, to: i32) {
+    let version = dynamic::as_int(tag.get("DataVersion"), 500);
+    if version >= to {
+        return;
+    }
+    update(Ty::Structure, tag, version, to);
+    dynamic::set(tag, "DataVersion", Tag::Int(to));
+}
+
 /// `PlayerDataStorage.load`: the DataVersion field stays as loaded.
 pub fn update_player(tag: &mut Tag) {
     let version = dynamic::as_int(tag.get("DataVersion"), -1);

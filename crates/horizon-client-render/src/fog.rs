@@ -37,6 +37,13 @@ pub struct FogTables {
     water_fog_end: Vec<f32>,
 }
 impl FogTables {
+    /// The biome's water fog end multiplier (1 where it sets none).
+    pub fn water_fog_end_factor(&self, biome: u16) -> f32 {
+        self.water_fog_end
+            .get(usize::from(biome))
+            .copied()
+            .unwrap_or(1.0)
+    }
     pub fn load(root: &Path, biomes: &Biomes) -> Self {
         let mut water_fog_end = vec![1.0; biomes.list.len()];
         for (name, &id) in &biomes.index {

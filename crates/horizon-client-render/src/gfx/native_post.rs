@@ -33,9 +33,13 @@ pub struct NativePost {
 /// The `frame` every stage of a pack reads (group 3, binding 0), written once a frame.
 pub struct NativeFrame {
     pub(super) buffer: wgpu::Buffer,
-    /// Group 3 of the stages that read only the frame (the sky).
+    /// Group 3 of the sky and material stages: the frame, the sun's shadow map and the
+    /// sampler that compares with it (the sky reads only the frame).
     pub layout: wgpu::BindGroupLayout,
     pub group: wgpu::BindGroup,
+    sampler: wgpu::Sampler,
+    /// The shadow map's place when the pack has none.
+    empty: wgpu::TextureView,
     start: std::time::Instant,
     frames: u32,
 }
@@ -64,29 +68,88 @@ impl NativeFrame {
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Native shader pack frame"),
-            entries: &[frame_entry(wgpu::ShaderStages::VERTEX_FRAGMENT)],
+            entries: &[
+                frame_entry(wgpu::ShaderStages::VERTEX_FRAGMENT),
+                texture_entry(1, wgpu::TextureSampleType::Depth),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
         });
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Native shader pack frame"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-        });
+        let sampler = super::native_shadow::comparison_sampler(device);
+        let empty = super::native_shadow::empty_map(device);
+        let group = Self::make_group(device, &layout, &buffer, &empty, &sampler);
         Self {
             buffer,
             layout,
             group,
+            sampler,
+            empty,
             start: std::time::Instant::now(),
             frames: 0,
         }
     }
 
-    /// Writes this frame's inputs, for a world of `size`.
-    pub fn write(&mut self, queue: &wgpu::Queue, frame: &Frame, size: [u32; 2]) {
+    fn make_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        buffer: &wgpu::Buffer,
+        shadow: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Native shader pack frame"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(shadow),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
+    }
+
+    /// Gives the stages `map` as the sun's shadow map (none: an empty one).
+    pub fn set_shadow_map(&mut self, device: &wgpu::Device, map: Option<&wgpu::TextureView>) {
+        self.group = Self::make_group(
+            device,
+            &self.layout,
+            &self.buffer,
+            map.unwrap_or(&self.empty),
+            &self.sampler,
+        );
+    }
+
+    /// Writes this frame's inputs, for a world of `size`; `shadow` is the sun's map and the
+    /// matrix it was drawn with, when it is drawn this frame.
+    pub fn write(
+        &mut self,
+        queue: &wgpu::Queue,
+        frame: &Frame,
+        size: [u32; 2],
+        shadow: Option<(&super::native_shadow::NativeShadow, Mat4, Vec3)>,
+    ) {
         let seconds = self.start.elapsed().as_secs_f32() % 3600.0;
-        let inputs = frame_inputs(frame, size, seconds, self.frames);
+        let mut inputs = frame_inputs(frame, size, seconds, self.frames);
+        if let Some((map, matrix, light)) = shadow {
+            inputs.shadow_direction = light.to_array();
+            inputs.shadow_matrix = matrix.to_cols_array_2d();
+            inputs.shadow_enabled = 1;
+            inputs.shadow_distance = map.settings.distance;
+            inputs.shadow_size = map.size as f32;
+            inputs.shadow_depth = map.depth_range();
+        }
         self.frames = self.frames.wrapping_add(1);
         queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(&inputs));
     }
@@ -357,6 +420,20 @@ impl NativePost {
     }
 }
 
+/// A number in 0..1 from a day count and a salt: a hash, so it is the same all through a day
+/// and in every world, and unrelated from one day to the next.
+fn day_roll(day: i64, salt: u64) -> f32 {
+    let mut z = (day as u64)
+        .wrapping_add(salt)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// How much of the moon is lit on each of vanilla's eight phases (full first).
+const MOON_LIGHT: [f32; 8] = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75];
+
 /// The frame as packs read it (docs/api/shaders-reference.md), from the renderer's `Frame`.
 pub fn frame_inputs(frame: &Frame, size: [u32; 2], seconds: f32, index: u32) -> FrameInputs {
     let aspect = size[0] as f32 / size[1].max(1) as f32;
@@ -416,6 +493,15 @@ pub fn frame_inputs(frame: &Frame, size: [u32; 2], seconds: f32, index: u32) -> 
         },
         frame_index: index,
         hide_gui: u32::from(pack.hide_gui),
+        eye_adaptation: [1.0 + pack.exposure_shift, 0.0, 0.0, 0.0],
+        day_number: pack.day_time.div_euclid(24_000).rem_euclid(65_536) as f32,
+        night_roll: day_roll(pack.day_time.div_euclid(24_000), 0x6A09_E667),
+        day_roll: day_roll(pack.day_time.div_euclid(24_000), 0xBB67_AE85),
+        night_progress: ((pack.day_time.rem_euclid(24_000) as f32 - 13_000.0) / 10_000.0)
+            .clamp(0.0, 1.0),
+        moon_phase: MOON_LIGHT[pack.day_time.div_euclid(24_000).rem_euclid(8) as usize],
+        // The shadow map, when the pack has one (`NativeFrame::write`).
+        ..Default::default()
     }
 }
 
@@ -423,6 +509,18 @@ pub fn frame_inputs(frame: &Frame, size: [u32; 2], seconds: f32, index: u32) -> 
 mod tests {
     use super::*;
     use horizon_shader_api::{MANIFEST, Pack, check};
+
+    #[test]
+    fn a_days_roll_is_fixed_for_the_day_and_a_fair_dice_over_many() {
+        assert_eq!(day_roll(12, 1), day_roll(12, 1));
+        assert_ne!(day_roll(12, 1), day_roll(13, 1));
+        assert_ne!(day_roll(12, 1), day_roll(12, 2));
+        let hits = (0..20_000)
+            .filter(|d| day_roll(*d, 0x6A09_E667) < 0.15)
+            .count();
+        assert!((2_700..3_300).contains(&hits), "{hits} of 20000 under 0.15");
+        assert!((0..20_000).all(|d| (0.0..1.0).contains(&day_roll(d, 5))));
+    }
 
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());

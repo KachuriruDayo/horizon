@@ -364,7 +364,10 @@ impl StructureResources {
             flate2::read::GzDecoder::new(bytes.as_slice())
                 .read_to_end(&mut raw)
                 .ok()?;
-            let tag = nbt::read_named(&raw, Limits::templates()).ok()?.0.tag;
+            let mut tag = nbt::read_named(&raw, Limits::templates()).ok()?.0.tag;
+            // A template saved by an older game (a mod's, a data pack's) is upgraded, as
+            // StructureTemplateManager.readStructure does; current ones are left alone.
+            crate::datafix::update_structure(&mut tag);
             Some(StructureTemplate::from_nbt(
                 &tag,
                 self.registry,

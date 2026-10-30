@@ -276,6 +276,7 @@ impl Game<'_> {
                 }
                 Event::NativeSettings(i) => self.native_settings_refresh(i),
                 Event::NativeButton(i, b) => self.native_settings_event(i, b),
+                Event::NativeSlider(i, k) => self.native_slider_event(i, k),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
             }
         }

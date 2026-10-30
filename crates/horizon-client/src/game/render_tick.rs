@@ -93,6 +93,7 @@ impl Game<'_> {
         sky: &horizon_client::environment::Sky,
         biome: u16,
         water_fog_color: [f32; 3],
+        water_tint: [f32; 3],
     ) -> FogData {
         let forward = self.forward();
         let at = [camera.x, camera.y, camera.z];
@@ -140,6 +141,38 @@ impl Game<'_> {
         let mut fog = horizon_client::fog::setup_fog(tables, &self.fog, &input);
         if !self.settings.horizon.fog {
             horizon_client::fog::clear_distance_fog(&mut fog, &input);
+        }
+        // A native mod may change it: the haze under water.
+        let mut native = super::native_hooks::NativeFog {
+            underwater: fog_type == horizon_client::fog::FogType::Water,
+            color: fog.color,
+            start: fog.environmental_start,
+            end: fog.environmental_end,
+            sky_end: fog.sky_end,
+            cloud_end: fog.cloud_end,
+            water_color: water_tint,
+            clarity: tables.water_fog_end_factor(biome),
+            daylight: sky
+                .fog_color
+                .iter()
+                .copied()
+                .fold(0.0f32, f32::max)
+                .clamp(0.0, 1.0),
+        };
+        let before = native.clone();
+        self.native_fog(&mut native);
+        if native != before {
+            let finite = native.color.iter().all(|c| c.is_finite())
+                && [native.start, native.end, native.sky_end, native.cloud_end]
+                    .iter()
+                    .all(|v| v.is_finite());
+            if finite {
+                fog.color = native.color.map(|c| c.clamp(0.0, 1.0));
+                fog.environmental_start = native.start;
+                fog.environmental_end = native.end.max(native.start);
+                fog.sky_end = native.sky_end;
+                fog.cloud_end = native.cloud_end;
+            }
         }
         fog
     }

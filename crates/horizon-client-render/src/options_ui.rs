@@ -187,6 +187,8 @@ impl Opt {
 
     pub(crate) fn caption(self) -> &'static str {
         match self {
+            Opt::Extra(item) => item.caption(),
+            Opt::NativeSlider(..) => "horizon.native_slider",
             Opt::Fov => "options.fov",
             Opt::RenderDistance => "options.renderDistance",
             Opt::SimulationDistance => "options.simulationDistance",
@@ -306,6 +308,10 @@ impl Opt {
     pub(crate) fn kind(self, s: &Settings) -> Kind {
         let unit = |v: f32, lo: f32, hi: f32| Kind::Slider(((v - lo) / (hi - lo)).clamp(0.0, 1.0));
         match self {
+            Opt::Extra(item) => Kind::Slider(item.slider(&s.extras).unwrap_or(0.0)),
+            Opt::NativeSlider(i, k) => {
+                Kind::Slider(native_slider(s, i, k).map_or(0.0, |r| r.value))
+            }
             Opt::FovEffects | Opt::DarknessPulsing => {
                 Kind::Slider(s.file.double(self.file_key().unwrap()).sqrt() as f32)
             }
@@ -383,6 +389,12 @@ impl Opt {
     pub fn label(self, s: &Settings) -> Text {
         let c = self.caption();
         match self {
+            Opt::Extra(item) => {
+                Text::literal(format!("{}: {}", item.caption(), item.value(&s.extras)))
+            }
+            Opt::NativeSlider(i, k) => {
+                Text::literal(native_slider(s, i, k).map_or_else(String::new, |r| r.label.clone()))
+            }
             Opt::ChatDelay => tr("options.chat.delay_none"),
             Opt::FovEffects
             | Opt::DarknessPulsing
@@ -704,6 +716,18 @@ impl Opt {
         let v = v.clamp(0.0, 1.0);
         let step = |lo: f32, hi: f32| (lo + v * (hi - lo)).round();
         match self {
+            Opt::Extra(item) => item.set_slider(&mut s.extras, v),
+            Opt::NativeSlider(i, k) => {
+                if let Some(row) = s
+                    .mods
+                    .installed
+                    .get_mut(i)
+                    .and_then(|m| m.native.as_mut())
+                    .and_then(|p| p.sliders.get_mut(k))
+                {
+                    row.value = v;
+                }
+            }
             Opt::FovEffects | Opt::DarknessPulsing => s.file.set(
                 self.file_key().unwrap(),
                 crate::options_file::V::Double(f64::from(v).powi(2)),
@@ -1053,6 +1077,8 @@ enum Act {
     ToggleMod(usize),
     /// Pick `s.shader_packs[i]`, or turn it off when it is the pick.
     PickShaderPack(usize),
+    /// An option of the picked Horizon shader pack: its index in the list, and the option's.
+    ShaderOption(usize, usize),
     OpenShaderPackFolder,
     /// The installed native mod's settings page.
     ModSettings(usize),
@@ -1127,6 +1153,8 @@ pub enum Event {
     /// Button `.1` of native mod `.0`'s page was pressed: the game tells the
     /// mod and refreshes the page.
     NativeButton(usize, usize),
+    /// Slider `.1` of native mod `.0`'s page moved: the game tells the mod its position.
+    NativeSlider(usize, usize),
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,
     /// Copy how an agent connects (the AI Agent page).
@@ -1249,6 +1277,10 @@ fn inactive(mut w: Widget) -> Widget {
         *active = false;
     }
     w
+}
+/// Slider `k` of the page of the native mod at row `i` of Options > Mods.
+fn native_slider(s: &Settings, i: usize, k: usize) -> Option<&crate::mod_list::NativeSliderRow> {
+    s.mods.installed.get(i)?.native.as_ref()?.sliders.get(k)
 }
 fn option_widget(s: &Settings, opt: Opt, x: f32, y: f32, w: f32) -> Widget {
     if !opt.available() {
@@ -1507,6 +1539,12 @@ impl OptionsUi {
             );
             rows.push(Row::Buttons(widget, None));
         }
+        for k in 0..page.sliders.len() {
+            rows.push(Row::Buttons(
+                option_widget(s, Opt::NativeSlider(i, k), 0.0, 0.0, 310.0),
+                None,
+            ));
+        }
         rows
     }
 
@@ -1523,6 +1561,9 @@ impl OptionsUi {
                     } else {
                         Text::literal(value)
                     };
+                    if item.is_slider() {
+                        return option_widget(s, Opt::Extra(item), 0.0, 0.0, 150.0);
+                    }
                     let widget = button(0.0, 0.0, 150.0, label, Act::Extra(item));
                     // A setting of a switch that is off does nothing: inactive,
                     // as vanilla greys out an option that can't apply.
@@ -1830,21 +1871,47 @@ impl OptionsUi {
                 if s.shader_packs.is_empty() {
                     return vec![Row::Header("horizon.shader_packs.empty")];
                 }
-                s.shader_packs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, pack)| {
-                        let kind = match pack.kind {
-                            crate::shader_pack_list::Kind::Horizon => {
-                                lang::get("horizon.shader_packs.kind_horizon")
-                            }
-                            crate::shader_pack_list::Kind::Classic => String::new(),
-                        };
-                        let label = Text::literal(format!("{}{kind}: ", pack.title))
-                            .append(on_off(s.horizon.shader_pack == pack.file));
-                        Row::Buttons(button(0.0, 0.0, 310.0, label, Act::PickShaderPack(i)), None)
-                    })
-                    .collect()
+                let mut rows = Vec::new();
+                for (i, pack) in s.shader_packs.iter().enumerate() {
+                    let kind = match pack.kind {
+                        crate::shader_pack_list::Kind::Horizon => {
+                            lang::get("horizon.shader_packs.kind_horizon")
+                        }
+                        crate::shader_pack_list::Kind::Classic => String::new(),
+                    };
+                    let picked = s.horizon.shader_pack == pack.file;
+                    let label =
+                        Text::literal(format!("{}{kind}: ", pack.title)).append(on_off(picked));
+                    rows.push(Row::Buttons(
+                        button(0.0, 0.0, 310.0, label, Act::PickShaderPack(i)),
+                        None,
+                    ));
+                    // The picked pack's own settings under it: a click goes to the next value
+                    // and round to the first (the options screens take only the left button).
+                    if picked {
+                        for (k, option) in pack.options.iter().enumerate() {
+                            let saved = horizon_shader_api::chosen(
+                                &s.horizon.shader_options,
+                                &pack.id,
+                                &option.id,
+                            );
+                            let value = saved
+                                .filter(|t| option.kind.constant_of(t).is_some())
+                                .map_or_else(|| option.kind.default_text(), str::to_owned);
+                            let value = match value.as_str() {
+                                "true" => "On".to_owned(),
+                                "false" => "Off".to_owned(),
+                                _ => value,
+                            };
+                            let label = Text::literal(format!("   {}: {value}", option.name));
+                            rows.push(Row::Buttons(
+                                button(0.0, 0.0, 310.0, label, Act::ShaderOption(i, k)),
+                                None,
+                            ));
+                        }
+                    }
+                }
+                rows
             }
             _ => {
                 let _ = s;
@@ -2452,7 +2519,18 @@ impl OptionsUi {
                 {
                     tooltip = Some(atlas.font.split(&tr(text), 170.0));
                 }
+                if let WKind::Slider {
+                    opt: Opt::Extra(item),
+                    ..
+                } = &wd.kind
+                {
+                    tooltip = Some(atlas.font.split(&Text::literal(item.description()), 170.0));
+                }
                 let key = match &wd.kind {
+                    WKind::Slider {
+                        opt: Opt::Extra(_) | Opt::NativeSlider(..),
+                        ..
+                    } => None,
                     WKind::Button {
                         act: Act::Cycle(opt),
                         ..
@@ -2749,6 +2827,9 @@ impl OptionsUi {
                 self.slider_value = Some((opt, v, Instant::now()));
                 set_slider(opt, s, v);
                 events.push(Event::SliderDrag);
+                if let Opt::NativeSlider(i, k) = opt {
+                    events.push(Event::NativeSlider(i, k));
+                }
             }
             return events;
         }
@@ -2851,6 +2932,27 @@ impl OptionsUi {
                                 events.push(Event::ShaderPack);
                             }
                         }
+                        Act::ShaderOption(i, k) => {
+                            if let Some(pack) = s.shader_packs.get(i)
+                                && let Some(option) = pack.options.get(k)
+                            {
+                                let now = horizon_shader_api::chosen(
+                                    &s.horizon.shader_options,
+                                    &pack.id,
+                                    &option.id,
+                                )
+                                .map(str::to_owned);
+                                let next = option.kind.cycle_text(now.as_deref(), right);
+                                s.horizon.shader_options = horizon_shader_api::with_chosen(
+                                    &s.horizon.shader_options,
+                                    &pack.id,
+                                    &option.id,
+                                    Some(&next),
+                                );
+                                // Saved, and the game builds the pack again with the value.
+                                events.push(Event::ShaderPack);
+                            }
+                        }
                         Act::OpenShaderPackFolder => events.push(Event::OpenShaderPackFolder),
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
@@ -2863,6 +2965,9 @@ impl OptionsUi {
                     self.slider_value = Some((opt, v, Instant::now()));
                     set_slider(opt, s, v);
                     events.push(Event::SliderDrag);
+                    if let Opt::NativeSlider(i, k) = opt {
+                        events.push(Event::NativeSlider(i, k));
+                    }
                 }
                 WKind::LanguageRow { code, .. } => {
                     if self.language_choice.as_deref() == Some(code.as_str()) {
@@ -3874,7 +3979,27 @@ mod tests {
                     }
                 ))
                 .count(),
-            crate::extras::rows().iter().filter(|r| r.is_ok()).count()
+            crate::extras::rows()
+                .iter()
+                .filter(|r| r.is_ok_and(|item| !item.is_slider()))
+                .count()
+        );
+        // Sliders drag where buttons click.
+        assert_eq!(
+            widgets
+                .iter()
+                .filter(|w| matches!(
+                    w.kind,
+                    WKind::Slider {
+                        opt: Opt::Extra(_),
+                        ..
+                    }
+                ))
+                .count(),
+            crate::extras::rows()
+                .iter()
+                .filter(|r| r.is_ok_and(|item| item.is_slider()))
+                .count()
         );
         assert_eq!(
             click(&mut ui, &mut s, Act::Extra(crate::extras::Item::Sort)),

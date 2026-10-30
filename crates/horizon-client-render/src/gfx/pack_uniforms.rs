@@ -22,6 +22,9 @@ pub struct PackInputs {
     /// Block and sky light at the camera, 0..15.
     pub eye_light: [i32; 2],
     pub hide_gui: bool,
+    /// Eye adaptation: how much brighter (above 0) or darker (below 0) the picture should be
+    /// than the light says; 0 is none.
+    pub exposure_shift: f32,
     /// The brightness option, 0..1.
     pub brightness: f32,
     /// The biome at the camera (3.4): registry id, `CAT_*`, `PPT_*`, temperature, downfall.

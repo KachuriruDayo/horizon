@@ -38,6 +38,8 @@ pub enum Ty {
     Biome,
     Recipe,
     StructureFeature,
+    /// `STRUCTURE`: a structure template's NBT file (palettes, block entities, entities).
+    Structure,
     GameEventName,
     Advancements,
     Stats,
@@ -221,6 +223,25 @@ impl Walker<'_> {
                 }
                 if let Some(s) = v.get_mut("structures") {
                     self.values(Ty::StructureFeature, s, "starts");
+                }
+            }
+            Ty::Structure => {
+                self.list_of_field(Ty::EntityTree, v, "entities", "nbt");
+                if let Some(Tag::List(blocks)) = v.get_mut("blocks") {
+                    for block in blocks {
+                        if let Some(be) = block.get_mut("nbt")
+                            && block_entity_known(be, k)
+                        {
+                            self.walk(Ty::BlockEntity, be);
+                        }
+                    }
+                }
+                self.list(Ty::BlockState, v, "palette");
+                // Templates with several palettes (shipwrecks): each is a list of block states.
+                if let Some(Tag::List(palettes)) = v.get_mut("palettes") {
+                    for palette in palettes {
+                        self.list_in(Ty::BlockState, palette);
+                    }
                 }
             }
             Ty::EntityChunk => self.list(Ty::EntityTree, v, "Entities"),

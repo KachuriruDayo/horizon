@@ -401,6 +401,9 @@ pub struct Graphics {
     /// not `shaderPack`, which versions before the clean-room rewrite saved and which stays
     /// ignored.
     pub shader_pack: String,
+    /// What the player chose for packs' options: `pack_id.option_id=value` pairs joined by `;`
+    /// (`horizon_shader_api::chosen`). An option not in it has its default.
+    pub shader_options: String,
 }
 impl Default for Graphics {
     fn default() -> Self {
@@ -432,6 +435,7 @@ impl Default for Graphics {
             battery: false,
             api: GraphicsApi::Auto,
             shader_pack: String::new(),
+            shader_options: String::new(),
         }
     }
 }
@@ -510,6 +514,7 @@ impl Graphics {
                 "batteryMode" => g.battery = flag(g.battery),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
                 "pickedShaderPack" => g.shader_pack = value.to_owned(),
+                "shaderOptions" => g.shader_options = value.to_owned(),
                 "overlay" => {
                     g.overlay = match value {
                         "fps" => Overlay::Fps,
@@ -524,7 +529,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiBrightness:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiBrightness:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\nshaderOptions:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -559,6 +564,7 @@ impl Graphics {
             bool_text(self.battery),
             self.api.name(),
             self.shader_pack,
+            self.shader_options,
         )
     }
     pub fn save(&self, dir: &Path) {
@@ -694,6 +700,7 @@ mod tests {
             battery: true,
             api: GraphicsApi::Dx12,
             shader_pack: "Golden Hour".into(),
+            shader_options: "golden.glow=0.4;golden.quality=High".into(),
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());

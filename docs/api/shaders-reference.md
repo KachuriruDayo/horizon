@@ -1,4 +1,4 @@
-# Shader API reference (0.1)
+# Shader API reference (0.2)
 
 Generated from `crates/horizon-shader-api` (`HORIZON_WRITE_DOCS=1 cargo test -p horizon-shader-api --test reference`
 rewrites it; the test fails when it drifts). The API's design and pack format: [shaders.md](shaders.md).
@@ -60,11 +60,26 @@ What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`;
 | --- | --- | --- |
 | `color` | `vec4<f32>` | The lit colour, 0..1, with its alpha. |
 
+The material file may also define `fn wind(input: WindInput) -> vec3<f32>`, which Horizon calls for every
+                    vertex of terrain and which returns how far to move it, in blocks (a vertex stage: it is how grass and
+                    flowers sway). Without it nothing moves. Shadows are drawn from where the terrain is without it.
+
+### `WindInput`
+
+One vertex of terrain, for the optional `fn wind(input: WindInput) -> vec3<f32>` of the material file, which returns how far to move it, in blocks.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `position` | `vec3<f32>` | The vertex, camera-relative, in blocks, before it moves. |
+| `weight` | `f32` | How much the vertex sways, 0..1: 0 for everything but plants; for grass, flowers and ferns (crossed quads) 0 at the base and 1 at the top. |
+
 Resources (bind group 3):
 
 | Binding | Declaration | Meaning |
 | --- | --- | --- |
 | 0 | `var<uniform> frame: Frame` | The frame (`Frame`). |
+| 1 | `var shadow_map: texture_depth_2d` | The shadow map: the terrain's depth from the sun by day and the moon at night (0 nearest the light). Read it through `shadow_visibility`. |
+| 2 | `var shadow_sampler: sampler_comparison` | Compares a depth with the shadow map's, filtering bilinearly. |
 
 ## post
 
@@ -134,6 +149,18 @@ The frame, as `frame` in every stage. Positions and directions are in world axes
 | `dimension` | `i32` | 388 | 0 the Overworld, -1 the Nether, 1 the End, 2 any other dimension. |
 | `frame_index` | `u32` | 392 | Frames drawn since the pack was loaded (wraps). |
 | `hide_gui` | `u32` | 396 | 1 while F1 hides the HUD, else 0. |
+| `day_number` | `f32` | 400 | The world's day count, wrapped at 65536 (exact in an f32): 0 on the first day. |
+| `night_roll` | `f32` | 404 | A number in 0..1 that is the same all through a day and changes at random with the next: a pack decides a rare event of the night with it (`night_roll < 0.15` is a night in seven). The same day gives the same number in every world. |
+| `day_roll` | `f32` | 408 | A second, independent number of the same kind, for another event. |
+| `night_progress` | `f32` | 412 | How far through the night it is, 0 at dusk to 1 at dawn; 0 by day. |
+| `shadow_direction` | `vec3<f32>` | 416 | Unit vector toward the light that casts the shadow map: the sun by day, the moon at night (the map is off while neither is up). |
+| `moon_phase` | `f32` | 428 | How much of the moon is lit, 0 (new) to 1 (full): vanilla's eight phases, one a day. |
+| `shadow_matrix` | `mat4x4<f32>` | 432 | Camera-relative world to the sun's shadow map (an orthographic view from the sun, depth 0..1 and 0 nearest the sun). Use `shadow_visibility` in the material stage. |
+| `shadow_enabled` | `u32` | 496 | 1 when the pack has a `[shadow]` and the map was drawn this frame, else 0. |
+| `shadow_distance` | `f32` | 500 | Half the side of the area the shadow map covers, in blocks. |
+| `shadow_size` | `f32` | 504 | The shadow map's side, in pixels. |
+| `shadow_depth` | `f32` | 508 | How many blocks the shadow map's depth range spans. |
+| `eye_adaptation` | `vec4<f32>` | 512 | Eye adaptation. `x` is how much brighter (above 1) or darker (below 1) the picture should be than the light says, for an eye still used to the light it came from: a moment above 1 when the player leaves a cave into daylight, below 1 when they go in. 1 when the setting is off, and in the Nether and the End. `y`, `z` and `w` are 0. |
 
 ## Options
 

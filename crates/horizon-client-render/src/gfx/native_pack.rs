@@ -5,6 +5,7 @@ use horizon_shader_api::{Report, StageKind};
 
 use super::native_material::{NativeMaterial, TerrainShape};
 use super::native_post::{NativeFrame, NativePost};
+use super::native_shadow::NativeShadow;
 use super::native_sky::NativeSky;
 use super::pack_timing::PassTiming;
 
@@ -13,6 +14,8 @@ pub struct NativePack {
     pub sky: Option<NativeSky>,
     pub material: Option<NativeMaterial>,
     pub post: Option<NativePost>,
+    /// The sun's shadow map, when the pack asks for one (`[shadow]`) and has a material.
+    pub shadow: Option<NativeShadow>,
     /// GPU time of each pass, while the renderer asks for it (`pack_timing.rs`).
     pub timing: Option<PassTiming>,
 }
@@ -29,7 +32,23 @@ impl NativePack {
         constants: &[(String, f64)],
     ) -> Result<(Self, Vec<String>), String> {
         let (globals, format) = (terrain.globals, terrain.format);
-        let frame = NativeFrame::new(device);
+        let mut frame = NativeFrame::new(device);
+        let shadow = report
+            .shadow
+            .filter(|_| report.stages.iter().any(|s| s.kind == StageKind::Material))
+            .map(|settings| {
+                // Drawn only while the option it follows is high enough (a low quality
+                // setting leaves the second pass over the terrain out).
+                let on = settings.option.as_ref().is_none_or(|id| {
+                    constants
+                        .iter()
+                        .find(|(name, _)| name == id)
+                        .is_some_and(|(_, value)| *value >= f64::from(settings.at_least))
+                });
+                NativeShadow::new(device, terrain, settings, on)
+            })
+            .transpose()?;
+        frame.set_shadow_map(device, shadow.as_ref().map(|s| &s.depth));
         let (post, others): (Vec<_>, Vec<_>) = report
             .stages
             .into_iter()
@@ -62,6 +81,7 @@ impl NativePack {
             sky,
             material,
             post,
+            shadow,
             timing: None,
         };
         Ok((pack, labels))

@@ -64,6 +64,206 @@
       "name": "panel_event",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_panel_event"
+    },
+    {
+      "name": "step",
+      "version": 1,
+      "module": "player-events",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_step"
+    },
+    {
+      "name": "jump",
+      "version": 1,
+      "module": "player-events",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_jump"
+    },
+    {
+      "name": "land",
+      "version": 1,
+      "module": "player-events",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_land"
+    },
+    {
+      "name": "splash",
+      "version": 1,
+      "module": "player-events",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_splash"
+    },
+    {
+      "name": "dig_speed",
+      "version": 1,
+      "module": "mining",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_dig_speed"
+    },
+    {
+      "name": "dig_resume",
+      "version": 1,
+      "module": "mining",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_dig_resume"
+    },
+    {
+      "name": "dig_stop",
+      "version": 1,
+      "module": "mining",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_dig_stop"
+    },
+    {
+      "name": "block_breaking",
+      "version": 1,
+      "module": "mining",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_breaking"
+    },
+    {
+      "name": "block_broken",
+      "version": 1,
+      "module": "mining",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_broken"
+    },
+    {
+      "name": "fog",
+      "version": 1,
+      "module": "fog",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_fog"
+    },
+    {
+      "name": "light_sources",
+      "version": 1,
+      "module": "lights",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_light_sources"
+    },
+    {
+      "name": "settings_sliders",
+      "version": 1,
+      "module": "mod-settings",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_sliders"
+    },
+    {
+      "name": "settings_slider",
+      "version": 1,
+      "module": "mod-settings",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_slider"
+    }
+  ],
+  "modules": [
+    {
+      "name": "player-events",
+      "version": 2,
+      "hooks": [
+        "step",
+        "jump",
+        "land",
+        "splash"
+      ]
+    },
+    {
+      "name": "world-read",
+      "version": 3,
+      "helpers": [
+        "block",
+        "block_in_tag",
+        "in_world",
+        "state_at",
+        "state_info",
+        "solid_at",
+        "water_at",
+        "light_at",
+        "biome_at",
+        "environment",
+        "top_y",
+        "chunk_loaded",
+        "falling_water_at"
+      ]
+    },
+    {
+      "name": "sound",
+      "version": 1,
+      "helpers": [
+        "has_sound",
+        "play_sound"
+      ]
+    },
+    {
+      "name": "audio-layers",
+      "version": 1,
+      "helpers": [
+        "layer_start",
+        "layer_set",
+        "layer_stop",
+        "layer_done",
+        "layer_volume",
+        "set_reverb",
+        "voices",
+        "voice_filter"
+      ]
+    },
+    {
+      "name": "particles",
+      "version": 1,
+      "helpers": [
+        "particle"
+      ]
+    },
+    {
+      "name": "entities-read",
+      "version": 1,
+      "helpers": [
+        "movers"
+      ]
+    },
+    {
+      "name": "mining",
+      "version": 1,
+      "hooks": [
+        "dig_speed",
+        "dig_resume",
+        "dig_stop",
+        "block_breaking",
+        "block_broken"
+      ],
+      "helpers": [
+        "sneaking",
+        "creative",
+        "game_time",
+        "break_block",
+        "pause_tool_wear",
+        "wear_held"
+      ]
+    },
+    {
+      "name": "block-views",
+      "version": 1,
+      "helpers": [
+        "set_thin_blocks"
+      ]
+    },
+    {
+      "name": "fog",
+      "version": 1,
+      "hooks": [
+        "fog"
+      ]
+    },
+    {
+      "name": "lights",
+      "version": 1,
+      "hooks": [
+        "light_sources"
+      ]
+    },
+    {
+      "name": "mod-settings",
+      "version": 1,
+      "hooks": [
+        "settings_sliders",
+        "settings_slider"
+      ]
+    },
+    {
+      "name": "frame-exposure",
+      "version": 1,
+      "helpers": [
+        "set_exposure"
+      ]
     }
   ]
 }

@@ -113,6 +113,11 @@ pub struct Extras {
     pub agent_control: bool,
     /// "Playing Horizon" on the player's Discord profile (`discord_presence`; on by default).
     pub discord_presence: bool,
+    /// Leaf fluff (what the Better Foliage mod did): 0 off, 1 light, 2 lush. Open leaf blocks
+    /// get crossed planes of their own texture around them, so a crown looks round and full.
+    pub leaf_fluff: u8,
+    /// How far the fluff may stray from its block, in tenths of a block (0 to 30).
+    pub leaf_spread: u8,
 }
 impl Default for Extras {
     fn default() -> Self {
@@ -131,6 +136,8 @@ impl Default for Extras {
             keystrokes_corner: Corner::TopLeft,
             keystrokes_cps: true,
             moved: Vec::new(),
+            leaf_fluff: 1,
+            leaf_spread: 10,
             minimap: false,
             minimap_corner: Corner::TopRight,
             minimap_size: 96,
@@ -221,6 +228,10 @@ impl Extras {
                 horizon_core::no_ai::KEY => e.no_ai = flag(e.no_ai),
                 "agentControl" => e.agent_control = flag(e.agent_control),
                 "discordPresence" => e.discord_presence = flag(e.discord_presence),
+                "leafFluff" => e.leaf_fluff = value.parse().map_or(e.leaf_fluff, |v: u8| v.min(2)),
+                "leafSpread" => {
+                    e.leaf_spread = value.parse().map_or(e.leaf_spread, |v: u8| v.min(30))
+                }
                 _ => {}
             }
         }
@@ -228,7 +239,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nownNameTag:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\ndiscordPresence:{}\n",
+            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nownNameTag:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\ndiscordPresence:{}\nleafFluff:{}\nleafSpread:{}\n",
             bool_text(self.fullbright),
             bool_text(self.dynamic_lights),
             bool_text(self.zoom),
@@ -263,6 +274,8 @@ impl Extras {
             bool_text(self.no_ai),
             bool_text(self.agent_control),
             bool_text(self.discord_presence),
+            self.leaf_fluff,
+            self.leaf_spread,
         )
     }
     /// Binds the extra key `name` (`SORT_KEY`); false for
@@ -393,6 +406,9 @@ pub enum Item {
     AgentControl,
     /// On the Horizon Settings page.
     DiscordPresence,
+    /// The Foliage section.
+    LeafFluff,
+    LeafSpread,
 }
 /// The Extras page: headers and items.
 pub fn rows() -> Vec<Result<Item, &'static str>> {
@@ -410,6 +426,9 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(SortKey),
         Err("Multiplayer"),
         Ok(AutoReconnect),
+        Err("Foliage"),
+        Ok(LeafFluff),
+        Ok(LeafSpread),
     ]
 }
 impl Item {
@@ -426,6 +445,8 @@ impl Item {
             Item::NoAi => "No AI",
             Item::AgentControl => "Agent Control",
             Item::DiscordPresence => "Discord Rich Presence",
+            Item::LeafFluff => "Leaf fluff",
+            Item::LeafSpread => "Leaf fluff spread",
         }
     }
     /// The switch this setting belongs to: it does nothing while that is off.
@@ -435,10 +456,41 @@ impl Item {
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
             Fullbright | DynamicLights | OwnNameTag | MouseTweaks | Sort | AutoReconnect | NoAi
-            | AgentControl | DiscordPresence => {
+            | AgentControl | DiscordPresence | LeafFluff | LeafSpread => {
                 return None;
             }
         })
+    }
+    /// The largest value of an item a slider sets (they all start at 0).
+    fn slider_max(self) -> Option<f32> {
+        Some(match self {
+            Item::LeafSpread => 30.0,
+            _ => return None,
+        })
+    }
+    /// Whether the item is a slider on the Extras page.
+    pub fn is_slider(self) -> bool {
+        self.slider_max().is_some()
+    }
+    /// A slider's position, 0..1.
+    pub fn slider(self, e: &Extras) -> Option<f32> {
+        let max = self.slider_max()?;
+        let v = match self {
+            Item::LeafSpread => f32::from(e.leaf_spread),
+            _ => return None,
+        };
+        Some((v / max).clamp(0.0, 1.0))
+    }
+    /// Moves a slider to the position `v`, 0..1.
+    pub fn set_slider(self, e: &mut Extras, v: f32) {
+        let Some(max) = self.slider_max() else {
+            return;
+        };
+        let at = (v.clamp(0.0, 1.0) * max).round();
+        match self {
+            Item::LeafSpread => e.leaf_spread = at as u8,
+            _ => {}
+        }
     }
     /// What the row says under its caption.
     pub fn description(self) -> &'static str {
@@ -474,6 +526,12 @@ impl Item {
             Item::AgentControl => {
                 "Your own AI agent can play this game through horizon-ctl or an MCP client, on this computer only."
             }
+            Item::LeafFluff => {
+                "Fuller, rounder tree crowns: crossed planes of the leaf texture around the leaf blocks you can see. Light adds one, Lush two. Costs frames in forests; Fancy leaves must be on."
+            }
+            Item::LeafSpread => {
+                "How far the fluff may stray from its block, in blocks. More looks wilder and fuller."
+            }
         }
     }
     /// The frame-time cost the main switch of an extra shows.
@@ -508,6 +566,10 @@ impl Item {
     pub fn value(self, e: &Extras) -> String {
         match self {
             Item::SortKey => crate::keybinds::display_name(&e.sort_key).plain(),
+            Item::LeafFluff => {
+                ["Off", "Light", "Lush"][usize::from(e.leaf_fluff.min(2))].to_owned()
+            }
+            Item::LeafSpread => format!("{:.1}", f32::from(e.leaf_spread) / 10.0),
             other => match other.switch(e) {
                 Some(true) => "On".into(),
                 _ => "Off".into(),
@@ -516,8 +578,16 @@ impl Item {
     }
     /// A click (`_back` for the right button: every item left is a switch,
     /// so both flip it). The sort key binds instead.
-    pub fn cycle(self, e: &mut Extras, _back: bool) {
+    pub fn cycle(self, e: &mut Extras, back: bool) {
         match self {
+            Item::LeafFluff => e.leaf_fluff = (e.leaf_fluff + if back { 2 } else { 1 }) % 3,
+            Item::LeafSpread => {
+                e.leaf_spread = if e.leaf_spread >= 30 {
+                    0
+                } else {
+                    e.leaf_spread + 5
+                }
+            }
             Item::Fullbright => e.fullbright = !e.fullbright,
             Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
             Item::OwnNameTag => e.own_name_tag = !e.own_name_tag,

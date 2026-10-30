@@ -4191,6 +4191,7 @@ impl Game<'_> {
             return Ok(());
         };
         let was_gliding = player.fall_flying;
+        let mut jumped = false;
         let dead = self.screen == Screen::Dead;
         // LivingEntity.isImmobile: a sleeper lies still in the bed.
         if let Some(head) = self.sleeping {
@@ -4204,6 +4205,7 @@ impl Game<'_> {
         } else if !dead && !riding {
             player.client_side = true;
             player.velocity = player.velocity.add_vector(pushed);
+            let was_grounded = player.ground.on_ground;
             MotionWorld {
                 entities: &entity_collisions,
                 player,
@@ -4213,6 +4215,7 @@ impl Game<'_> {
                 resources: self.motion,
             }
             .controlled_simulation_tick_with_sprint_window(keys, sprint_window)?;
+            jumped = was_grounded && keys.jump && !player.flying && player.velocity.y > 0.2;
         } else {
             // LivingEntity.baseTick counts hurtTime down for a dead or riding
             // player too (controlled_simulation_tick does it otherwise): left
@@ -4240,8 +4243,21 @@ impl Game<'_> {
         self.previous_eye = self.eye;
         self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
         let feet = [player.position.x, player.position.y, player.position.z];
+        let sprinting = player.sprinting;
+        if jumped {
+            self.native_jump(feet);
+        }
         for event in events {
             match event {
+                horizon_client::motion::MotionEvent::Emission {
+                    position,
+                    muffled: false,
+                    ..
+                } if self.native_stepped([position.x, position.y, position.z], feet, sprinting) => {
+                }
+                horizon_client::motion::MotionEvent::Fall(
+                    horizon_client::landing::FallEvent::HitGround { .. },
+                ) => self.native_land(feet),
                 horizon_client::motion::MotionEvent::Emission { state, muffled, .. } => {
                     let sounds = self.res.facts().get(state).sounds.clone();
                     // Player.playStepSound: muffled under the swim sound in water.
@@ -4270,6 +4286,7 @@ impl Game<'_> {
                         "minecraft:entity.player.splash"
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
+                    self.native_splash(feet);
                 }
                 horizon_client::motion::MotionEvent::SplashParticle {
                     bubble,
@@ -5050,8 +5067,9 @@ impl Game<'_> {
                 }
                 return;
             }
+            let resume = self.dig_resume(hit.pos);
             if let Some(r) = self.remote.as_mut() {
-                r.destroying = Some((hit.pos, face, 0.0));
+                r.destroying = Some((hit.pos, face, resume));
                 r.destroying_item = held;
             }
             // startDestroyBlock plays the first hit and crack itself; the
@@ -5059,7 +5077,7 @@ impl Game<'_> {
             self.breaking_block_effects(hit.pos, hit.face, true);
             self.mining = Some(Mining {
                 pos: hit.pos,
-                progress: 0.0,
+                progress: resume,
                 ticks: 0,
             });
             return;
@@ -5089,6 +5107,7 @@ impl Game<'_> {
             }
             self.mining = None;
         } else {
+            self.native_dig_stop(pos, done);
             if last_face != face {
                 self.send(S::PlayerAction(play::PlayerAction {
                     action: 1,

@@ -122,7 +122,52 @@ fn behind() -> bool {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+/// Windows: a helper thread asks for efficiency, which on a hybrid processor means the small
+/// cores (the quality of service of a background thread, `EcoQoS`). The render thread and the
+/// server thread, which `favour_current` raises, then keep the big cores. Measured on a Core Ultra
+/// 5 125H, running over new terrain: the worst frames fell from about 145 ms to 45 ms and the
+/// slowest 1% of frames rose from 20 to 40 fps, where a lower priority as well (`both`) now and then
+/// starved a helper. `HORIZON_HELPERS` picks what is asked, for comparing: `eco` (the default),
+/// `below`, `both` or `none`.
+#[cfg(windows)]
+fn behind() -> bool {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadInformation, SetThreadPriority,
+        THREAD_POWER_THROTTLING_CURRENT_VERSION, THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        THREAD_POWER_THROTTLING_STATE, THREAD_PRIORITY_BELOW_NORMAL, ThreadPowerThrottling,
+    };
+    let mode = std::env::var("HORIZON_HELPERS").unwrap_or_default();
+    let (eco, below) = match mode.as_str() {
+        "none" => return false,
+        "eco" => (true, false),
+        "below" => (false, true),
+        "both" => (true, true),
+        _ => (true, false),
+    };
+    let mut took = false;
+    // SAFETY: GetCurrentThread's pseudo handle needs no closing; the state lives across the call.
+    unsafe {
+        if eco {
+            let state = THREAD_POWER_THROTTLING_STATE {
+                Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+                ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+                StateMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+            };
+            took |= SetThreadInformation(
+                GetCurrentThread(),
+                ThreadPowerThrottling,
+                std::ptr::from_ref(&state).cast(),
+                std::mem::size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
+            ) != 0;
+        }
+        if below {
+            took |= SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) != 0;
+        }
+    }
+    took
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
 fn behind() -> bool {
     false
 }

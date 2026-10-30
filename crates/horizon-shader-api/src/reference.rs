@@ -1,7 +1,7 @@
 //! docs/api/shaders-reference.md, generated from the stages and inputs this
 //! crate defines (`tests/reference.rs` fails when the file drifts).
 use crate::check::{MAX_EXPRESSIONS, MAX_TEXTURE_READS};
-use crate::inputs::{Frame, SURFACE, Struct};
+use crate::inputs::{Frame, SURFACE, Struct, WIND_INPUT};
 use crate::manifest::{API, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES};
 use crate::package::{MAX_TOTAL, MAX_WGSL};
 use crate::stages::{GROUP, StageKind};
@@ -54,6 +54,12 @@ pub fn markdown() -> String {
         out += &table(kind.input(), None);
         if kind == StageKind::Material {
             out += &table(&SURFACE, None);
+            out += "The material file may also define `fn wind(input: WindInput) -> vec3<f32>`, which Horizon calls for every
+                    vertex of terrain and which returns how far to move it, in blocks (a vertex stage: it is how grass and
+                    flowers sway). Without it nothing moves. Shadows are drawn from where the terrain is without it.
+
+";
+            out += &table(&WIND_INPUT, None);
         }
         out += &format!(
             "Resources (bind group {GROUP}):\n\n| Binding | Declaration | Meaning |\n| --- | --- | --- |\n"

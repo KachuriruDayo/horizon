@@ -96,6 +96,8 @@ stages.
 
 ## Changelog
 
+- 2026-10-29: API 0.2: `[shadow]` in the manifest, the sun's shadow map drawn before the world, and
+  `shadow_visibility(position, normal)` in the material stage. A pack for 0.1 reads as before.
 - 2026-10-26: the material stage in the game: terrain's surfaces through the pack's `material`.
 - 2026-10-26: the sky stage in the game: the pack's `sky` gets vanilla's colour along each ray.
 - 2026-10-26: the post stage in the game (`HORIZON_SHADER_PACK`, hot reload with the last good pack kept).

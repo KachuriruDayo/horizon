@@ -50,6 +50,15 @@ pub struct NativePage {
     /// Each key's name, label and default key (`key.keyboard.z`).
     pub keys: Vec<[String; 3]>,
     pub buttons: Vec<String>,
+    /// The sliders, after the buttons.
+    pub sliders: Vec<NativeSliderRow>,
+}
+
+/// A slider of a native mod's page: its label (with the value in it) and its position, 0..1.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NativeSliderRow {
+    pub label: String,
+    pub value: f32,
 }
 
 impl ModList {

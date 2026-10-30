@@ -143,6 +143,37 @@ uniform! {
         frame_index: u32,
         /// 1 while F1 hides the HUD, else 0.
         hide_gui: u32,
+        /// The world's day count, wrapped at 65536 (exact in an f32): 0 on the first day.
+        day_number: f32,
+        /// A number in 0..1 that is the same all through a day and changes at random with the
+        /// next: a pack decides a rare event of the night with it (`night_roll < 0.15` is a
+        /// night in seven). The same day gives the same number in every world.
+        night_roll: f32,
+        /// A second, independent number of the same kind, for another event.
+        day_roll: f32,
+        /// How far through the night it is, 0 at dusk to 1 at dawn; 0 by day.
+        night_progress: f32,
+        /// Unit vector toward the light that casts the shadow map: the sun by day, the moon
+        /// at night (the map is off while neither is up).
+        shadow_direction: [f32; 3],
+        /// How much of the moon is lit, 0 (new) to 1 (full): vanilla's eight phases, one a day.
+        moon_phase: f32,
+        /// Camera-relative world to the sun's shadow map (an orthographic view from the sun,
+        /// depth 0..1 and 0 nearest the sun). Use `shadow_visibility` in the material stage.
+        shadow_matrix: [[f32; 4]; 4],
+        /// 1 when the pack has a `[shadow]` and the map was drawn this frame, else 0.
+        shadow_enabled: u32,
+        /// Half the side of the area the shadow map covers, in blocks.
+        shadow_distance: f32,
+        /// The shadow map's side, in pixels.
+        shadow_size: f32,
+        /// How many blocks the shadow map's depth range spans.
+        shadow_depth: f32,
+        /// Eye adaptation. `x` is how much brighter (above 1) or darker (below 1) the picture
+        /// should be than the light says, for an eye still used to the light it came from: a
+        /// moment above 1 when the player leaves a cave into daylight, below 1 when they go in.
+        /// 1 when the setting is off, and in the Nether and the End. `y`, `z` and `w` are 0.
+        eye_adaptation: [f32; 4],
     }
 }
 
@@ -179,6 +210,16 @@ pub const MATERIAL_INPUT: Struct = Struct {
     },
 };
 
+/// The input of the material file's optional `wind` function: one vertex of terrain.
+pub const WIND_INPUT: Struct = Struct {
+    name: "WindInput",
+    doc: "One vertex of terrain, for the optional `fn wind(input: WindInput) -> vec3<f32>` of the material file,           which returns how far to move it, in blocks.",
+    fields: fields! {
+        position: "vec3<f32>" = "The vertex, camera-relative, in blocks, before it moves.",
+        weight: "f32" = "How much the vertex sways, 0..1: 0 for everything but plants; for grass, flowers and ferns (crossed quads) 0 at the base and 1 at the top.",
+    },
+};
+
 /// What the material stage returns.
 pub const SURFACE: Struct = Struct {
     name: "Surface",
@@ -207,9 +248,9 @@ mod tests {
     #[test]
     fn frame_fields_carry_their_docs() {
         let wgsl = Frame::WGSL;
-        assert_eq!(wgsl.fields.len(), 28);
+        assert_eq!(wgsl.fields.len(), 40);
         assert!(wgsl.fields.iter().all(|f| !f.doc.trim().is_empty()));
-        assert_eq!(std::mem::size_of::<Frame>(), 4 * 64 + 9 * 16);
+        assert_eq!(std::mem::size_of::<Frame>(), 5 * 64 + 13 * 16);
         assert!(
             wgsl.wgsl()
                 .contains("    camera_position: vec3<f32>,\n    time: f32,\n")

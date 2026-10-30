@@ -136,6 +136,8 @@ fn scene(
         blend_radius,
         smooth_lighting,
         cutout_leaves,
+        leaf_fluff: (0, 10),
+        chop: None,
     };
     let section_y = int(&row["section_y"])?;
     let started = Instant::now();

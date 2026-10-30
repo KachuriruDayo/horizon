@@ -764,6 +764,10 @@ pub enum Opt {
     SharePresence,
     DirectionalAudio,
     MusicToast,
+    /// A slider of Horizon Extras (`extras::Item::is_slider`).
+    Extra(crate::extras::Item),
+    /// A slider of a native mod's page: the mod's row in Options > Mods and the slider's index.
+    NativeSlider(usize, usize),
 }
 
 #[cfg(test)]

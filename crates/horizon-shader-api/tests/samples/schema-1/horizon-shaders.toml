@@ -4,7 +4,7 @@ schema = 1
 id = "sample_pack"
 name = "Sample Pack"
 version = "1.0.0"
-api = "0.1"
+api = "0.2"
 description = "Every key of schema 1."
 authors = ["Horizon"]
 license = "MIT"
@@ -54,6 +54,10 @@ name = "Tone mapping"
 type = "choice"
 values = ["None", "Soft", "Filmic"]
 default = "Soft"
+
+[shadow]
+resolution = 2048
+distance = 96.0
 
 [budget]
 gpu_ms = 1.5

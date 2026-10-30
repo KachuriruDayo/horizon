@@ -32,8 +32,12 @@ struct HorizonMaterialOut {
 fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
     light: vec2<u32>, origin: vec3<f32>) -> HorizonMaterialOut {
     let pos = position + origin;
+    // The high half of the vertex colour's alpha is 15 minus how much the vertex sways
+    // (mesher.rs's `with_sway`): the usual 15 means not at all. The pack's `wind` moves it.
+    let sway = f32(15u - ((u32(round(color.a * 255.0)) >> 4u) & 15u)) / 15.0;
+    let moved = pos + wind(WindInput(pos, sway));
     var out: HorizonMaterialOut;
-    out.clip = horizon_terrain_globals.view_proj * vec4(pos, 1.0);
+    out.clip = horizon_terrain_globals.view_proj * vec4(moved, 1.0);
     out.uv = uv;
     out.layer = layer;
     out.tint = vec4(color.rgb, 1.0);
@@ -42,7 +46,7 @@ fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color
     // 16 per level, 15 levels.
     out.light = min(vec2(block, sky) / 240.0, vec2(1.0));
     out.lightmap = horizon_terrain_sample_lightmap(sky / 16.0, block / 16.0).rgb;
-    out.position = pos;
+    out.position = moved;
     out.spherical = length(pos);
     out.cylindrical = max(length(pos.xz), abs(pos.y));
     return out;
@@ -103,7 +107,7 @@ pub struct NativeMaterial {
 
 /// terrain.wgsl's terrain section (its globals, bindings, sampling, lighting and fog), with
 /// every name it declares prefixed.
-fn vanilla_terrain() -> String {
+pub(super) fn vanilla_terrain() -> String {
     prefixed(
         section(TERRAIN, "struct Globals {", "// Sky (SkyRenderer)"),
         PREFIX,

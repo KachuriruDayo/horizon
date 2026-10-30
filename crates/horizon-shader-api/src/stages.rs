@@ -2,7 +2,7 @@
 //! that Horizon calls inside its own passes, and the WGSL put around a
 //! pack's files to build a stage: the prelude before (the inputs and the
 //! resources), the entry points after.
-use crate::inputs::{Frame, MATERIAL_INPUT, POST_INPUT, SKY_INPUT, SURFACE, Struct};
+use crate::inputs::{Frame, MATERIAL_INPUT, POST_INPUT, SKY_INPUT, SURFACE, Struct, WIND_INPUT};
 use crate::package::Pack;
 
 /// The bind group of a pack's resources; groups 0 to 2 are the renderer's.
@@ -68,6 +68,51 @@ const POST_RESOURCES: [Resource; 6] = [
     },
 ];
 
+const MATERIAL_RESOURCES: [Resource; 3] = [
+    FRAME,
+    Resource {
+        binding: 1,
+        name: "shadow_map",
+        ty: "var shadow_map: texture_depth_2d",
+        doc: "The shadow map: the terrain's depth from the sun by day and the moon at night (0 nearest the light). Read it through `shadow_visibility`.",
+    },
+    Resource {
+        binding: 2,
+        name: "shadow_sampler",
+        ty: "var shadow_sampler: sampler_comparison",
+        doc: "Compares a depth with the shadow map's, filtering bilinearly.",
+    },
+];
+
+/// Functions the material prelude gives packs.
+const MATERIAL_HELPERS: &str = "// How much of the light that casts the shadow map (the sun by day, the moon at night, see
+// `frame.shadow_direction`) reaches `position` (camera-relative, in blocks) on a surface facing
+// `normal`: 1 in the light, 0 in shadow, soft at the edge. 1 where the pack has no `[shadow]`
+// or the position is outside the map.
+fn shadow_visibility(position: vec3<f32>, normal: vec3<f32>) -> f32 {
+    if frame.shadow_enabled == 0u {
+        return 1.0;
+    }
+    let texel = 2.0 * frame.shadow_distance / frame.shadow_size;
+    let p = position + normal * (texel * 1.5 + 0.02);
+    let clip = frame.shadow_matrix * vec4<f32>(p, 1.0);
+    let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
+    let edge = max(abs(clip.x), abs(clip.y));
+    if edge >= 1.0 || clip.z >= 1.0 || clip.z <= 0.0 {
+        return 1.0;
+    }
+    let reference = clip.z - (texel * 1.2 + 0.03) / frame.shadow_depth;
+    let texel_uv = 1.0 / frame.shadow_size;
+    // Four taps of a bilinear comparison: each is already a 2x2 filter, so the edge is soft.
+    var lit = 0.0;
+    for (var i = 0; i < 4; i++) {
+        let corner = vec2<f32>(f32(i & 1) - 0.5, f32(i >> 1) - 0.5) * 1.5;
+        lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + corner * texel_uv, reference);
+    }
+    return mix(lit / 4.0, 1.0, smoothstep(0.85, 1.0, edge));
+}
+";
+
 /// Functions the post prelude gives packs.
 const POST_HELPERS: &str = "\
 // The world's depth at `uv` (reversed: 0 is the sky).
@@ -120,6 +165,15 @@ struct HorizonMaterialIn {
 @fragment fn horizon_fs_material(in: HorizonMaterialIn) -> @location(0) vec4<f32> {
     let input = MaterialInput(in.albedo, in.tint, in.light, in.lightmap, in.world, in.uv, in.translucent != 0u);
     return material(input).color;
+}
+@vertex fn horizon_vs_material(@location(0) position: vec3<f32>, @location(1) weight: f32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(position + wind(WindInput(position, weight)), 1.0);
+}
+";
+
+/// What `wind` is when the pack does not define it: nothing moves.
+const DEFAULT_WIND: &str = "fn wind(input: WindInput) -> vec3<f32> {
+    return vec3<f32>(0.0);
 }
 ";
 
@@ -182,7 +236,8 @@ impl StageKind {
     pub fn resources(self) -> &'static [Resource] {
         match self {
             StageKind::Post => &POST_RESOURCES,
-            StageKind::Sky | StageKind::Material => std::slice::from_ref(&FRAME),
+            StageKind::Material => &MATERIAL_RESOURCES,
+            StageKind::Sky => std::slice::from_ref(&FRAME),
         }
     }
 
@@ -194,12 +249,15 @@ impl StageKind {
         out += &self.input().wgsl();
         if self == StageKind::Material {
             out += &SURFACE.wgsl();
+            out += &WIND_INPUT.wgsl();
         }
         for r in self.resources() {
             out += &format!("@group({GROUP}) @binding({}) {};\n", r.binding, r.ty);
         }
-        if self == StageKind::Post {
-            out += POST_HELPERS;
+        match self {
+            StageKind::Post => out += POST_HELPERS,
+            StageKind::Material => out += MATERIAL_HELPERS,
+            StageKind::Sky => {}
         }
         out
     }
@@ -260,6 +318,19 @@ pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
         push(shared, pack.source(shared).unwrap_or_default());
     }
     push(file, pack.source(file).unwrap_or_default());
+    // The material file may define `wind`; where it does not, nothing moves.
+    if kind == StageKind::Material {
+        let defines = pack
+            .manifest
+            .shared
+            .iter()
+            .map(String::as_str)
+            .chain([file])
+            .any(|f| pack.source(f).is_some_and(|s| s.contains("fn wind(")));
+        if !defines {
+            push("<defaults>", DEFAULT_WIND);
+        }
+    }
     push("<entries>", kind.entries());
     composed
 }

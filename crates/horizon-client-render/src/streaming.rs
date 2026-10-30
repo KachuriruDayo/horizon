@@ -45,6 +45,12 @@ pub trait ChunkGenerator: Send + Sync + 'static {
             worker,
         })
     }
+    /// What this generator's far samples depend on, as a number that is the same on every run
+    /// (`lod_cache::fingerprint`): its seed, preset and dimension. `None` keeps the far samples
+    /// from being saved to disk.
+    fn lod_fingerprint(&self) -> Option<u64> {
+        None
+    }
     /// An undecorated far-terrain column, without allocating gameplay chunks.
     fn lod_surface(
         &self,
@@ -160,13 +166,15 @@ impl<G: ChunkGenerator> Saves for G {
     }
 }
 /// Per-job mesher inputs that change with the dimension or the options.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct MeshSettings {
     nether: bool,
     zoom: BiomeZoom,
     blend_radius: i32,
     smooth_lighting: bool,
     cutout_leaves: bool,
+    leaf_fluff: (u8, u8),
+    chop: Option<crate::mesher::ChopViews>,
 }
 enum Job {
     Generate(i32, i32),
@@ -338,6 +346,10 @@ pub struct Streaming {
     /// The `ao` and `cutoutLeaves` options.
     pub smooth_lighting: bool,
     pub cutout_leaves: bool,
+    /// Horizon's leaf fluff: (level 0 to 2, spread in tenths of a block).
+    pub leaf_fluff: (u8, u8),
+    /// The logs being chopped (Horizon's tree chop), drawn stripped and thin.
+    pub chop: Option<crate::mesher::ChopViews>,
     /// Incremental relighting of block edits on lit chunks (see `light::relight`).
     light_tables: Arc<LightTables>,
     /// Applied edits by sequence, replayed onto light jobs snapshotted before them.
@@ -631,6 +643,8 @@ impl Streaming {
                                         blend_radius: settings.blend_radius,
                                         smooth_lighting: settings.smooth_lighting,
                                         cutout_leaves: settings.cutout_leaves,
+                                        leaf_fluff: settings.leaf_fluff,
+                                        chop: settings.chop,
                                         assets: &context.assets,
                                         render: &context.render,
                                         tables: &context.tables,
@@ -693,6 +707,8 @@ impl Streaming {
             biome_blend: 2,
             smooth_lighting: true,
             cutout_leaves: true,
+            leaf_fluff: (0, 10),
+            chop: None,
             light_tables,
             light_log: Vec::new(),
             light_edit_sequence: 0,
@@ -1418,6 +1434,8 @@ impl Streaming {
                             blend_radius: self.biome_blend,
                             smooth_lighting: self.smooth_lighting,
                             cutout_leaves: self.cutout_leaves,
+                            leaf_fluff: self.leaf_fluff,
+                            chop: self.chop.clone(),
                         },
                     ),
                 );

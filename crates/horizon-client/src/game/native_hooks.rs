@@ -6,6 +6,39 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 9 adds sliders on a mod's settings page (`native_settings_sliders`,
+//! `native_settings_slider`: module `mod-settings`) and the picture's exposure for the shader
+//! packs (`native_set_exposure`: module `frame-exposure`).
+//!
+//! API 8 adds the fog the camera sees (`native_fog`, module `fog`) and the light sources the
+//! dynamic lights gather (`native_light_sources`, module `lights`).
+//!
+//! API 7 adds what a mod that changes how blocks are mined needs: the dig's speed, where it
+//! resumes and where it stops (`native_dig_speed`, `native_dig_resume`, `native_dig_stop`), the
+//! moments a player's break takes a block out (`native_block_breaking`, `native_block_broken`) and
+//! the helpers to break more as the player and wear the tool (`native_break_block`,
+//! `native_pause_tool_wear`, `native_wear_held`, `native_sneaking`, `native_creative`,
+//! `native_game_time`): module `mining`; and blocks drawn thin and stripped
+//! (`native_set_thin_blocks`): module `block-views`.
+//!
+//! API 6 adds what an effects mod on the water needs: the player jumping into water
+//! (`native_splash`, `player-events` 2), the surface and the water's flow (`native_top_y`,
+//! `native_chunk_loaded`, `native_falling_water_at`, `world-read` 3), the effect particles
+//! (`native_particle`, `particles` 1) and the mobs and boats that move (`native_movers`,
+//! `entities-read` 1).
+//!
+//! API 5 adds what a sound mod that listens to the surroundings needs: block states and their
+//! sound walls (`native_state_at`, `native_state_info`, `native_solid_at`, `native_water_at`),
+//! light, biome and the day's weather and time (`native_light_at`, `native_biome_at`,
+//! `native_environment`), the player's eye height and whether a world is open (`world-read` 2),
+//! and the mixer's own sounds: layers, the room's reverb and the filters of sounds in the world
+//! (`audio-layers` 1).
+//!
+//! API 4 adds the player's steps, jumps and landings (`native_step`, `native_jump`,
+//! `native_land`: module `player-events`), the block at a place (`native_block`,
+//! `native_block_in_tag`: `world-read`) and the game's sounds (`native_has_sound`,
+//! `native_play_sound`: `sound`), and the versions of such parts (`NATIVE_MODULES`).
+//!
 //! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
 //!
 //! API 2 adds the item panel beside container screens and its recipe pages
@@ -38,7 +71,48 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 3;
+pub(crate) const NATIVE_HOOKS_API: u32 = 9;
+
+/// The native API's parts and their versions. Each part groups the hook points and helpers of
+/// one area of the game and is versioned on its own: its version is raised when it gains a hook
+/// point or a helper, and `native-hooks.json` lists what each version holds (`modules`; a test
+/// keeps the two the same). A mod names the parts it needs, so one area of the game can change
+/// without every mod having to follow. Hook points keep their own contract versions there too.
+#[allow(dead_code)]
+pub(crate) const NATIVE_MODULES: &[(&str, u32)] = &[
+    ("player-events", 2),
+    ("world-read", 3),
+    ("sound", 1),
+    ("audio-layers", 1),
+    ("particles", 1),
+    ("entities-read", 1),
+    ("mining", 1),
+    ("block-views", 1),
+    ("fog", 1),
+    ("lights", 1),
+    ("mod-settings", 1),
+    ("frame-exposure", 1),
+];
+
+/// A step of the player (`native_step`): the block stepped on and where the feet are.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NativeStep {
+    pub(crate) floor: [i32; 3],
+    pub(crate) feet: [f64; 3],
+    pub(crate) sprinting: bool,
+}
+
+/// A block as a native mod reads it (`native_block`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeBlock {
+    /// `minecraft:stone`.
+    pub(crate) name: String,
+    pub(crate) properties: std::collections::BTreeMap<String, String>,
+    /// The sound event of its vanilla step (`block.stone.step`).
+    pub(crate) step_sound: String,
+}
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -74,6 +148,122 @@ pub(crate) struct NativePlayer {
     pub(crate) pitch: f32,
     /// `minecraft:overworld`, `minecraft:the_nether`, `minecraft:the_end`.
     pub(crate) dimension: &'static str,
+    /// How high the eyes are above the feet, in blocks (API 5).
+    pub(crate) eye_height: f32,
+    /// Blocks a tick (API 6).
+    pub(crate) velocity: [f64; 3],
+    /// Whether the player rides a vehicle or a mount (API 6).
+    pub(crate) riding: bool,
+}
+
+/// A slider of a mod's settings page (`native_settings_sliders`): its label, with the value in it,
+/// and its position, 0..1.
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NativeSlider {
+    pub(crate) label: String,
+    pub(crate) value: f32,
+}
+
+/// The fog of this frame (`native_fog`): the engine's own values, which a mod may change, and what
+/// it may want to know.
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeFog {
+    /// Whether the camera is under water.
+    pub(crate) underwater: bool,
+    /// The fog colour, red, green, blue and strength (1).
+    pub(crate) color: [f32; 4],
+    /// Where the fog starts and where it is full, in blocks, and the ends of the sky's and the
+    /// clouds' (`sky_end`, `cloud_end`).
+    pub(crate) start: f32,
+    pub(crate) end: f32,
+    pub(crate) sky_end: f32,
+    pub(crate) cloud_end: f32,
+    /// The biome's water colour, 0..1 each. Read only.
+    pub(crate) water_color: [f32; 3],
+    /// How clear the biome's water is: a multiplier of the distance seen, 1 for most. Read only.
+    pub(crate) clarity: f32,
+    /// How bright the sky is, 0..1. Read only.
+    pub(crate) daylight: f32,
+}
+
+/// A source of light a dynamic light may be made of (`native_light_sources`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeLightSource {
+    pub(crate) at: [f64; 3],
+    /// Its light level, 0..15.
+    pub(crate) level: u8,
+    /// An open flame (a torch, a burning mob or item), which does not burn under water.
+    pub(crate) open_flame: bool,
+}
+
+/// A block the mesher draws as a thin post (`native_set_thin_blocks`), the world keeping the whole
+/// block: a log being chopped, stripped and thinning. Its neighbours see it open.
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeThinBlock {
+    pub(crate) pos: [i32; 3],
+    /// The block drawn, `minecraft:stripped_oak_log`, with its properties (`axis`).
+    pub(crate) name: String,
+    pub(crate) properties: std::collections::BTreeMap<String, String>,
+    /// How wide the post is, 0.25 to 1 of the block.
+    pub(crate) width: f32,
+}
+
+/// What the engine keeps for the native API: the thin blocks the mesher was last given, and
+/// whether the tool's wear is paused (a mod breaks many blocks as one job).
+#[derive(Default)]
+pub(super) struct NativeEngine {
+    thin: std::collections::HashMap<[i32; 3], horizon_client::mesher::ChopView>,
+    wear_paused: bool,
+    /// The picture's exposure shift (gain minus one) the tick before and now: a mod's
+    /// `native_set_exposure`, which the frame reads between the two.
+    exposure: [f32; 2],
+}
+
+/// A mob or a boat as a native mod reads it (`native_movers`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeMover {
+    /// A mob's id; a boat has none worth keeping (`u32::MAX`).
+    pub(crate) id: u32,
+    pub(crate) boat: bool,
+    pub(crate) position: [f64; 3],
+    /// Where it was a tick ago, so `position - previous` is how it moves.
+    pub(crate) previous: [f64; 3],
+    pub(crate) width: f32,
+}
+
+/// What a block state is made of, read once per state (`native_state_info`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeStateInfo {
+    /// `minecraft:stone`.
+    pub(crate) name: String,
+    /// An opaque block: sound does not pass it.
+    pub(crate) solid: bool,
+    pub(crate) water: bool,
+}
+
+/// A biome and its temperature (`native_biome_at`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeBiome {
+    /// `minecraft:plains`.
+    pub(crate) name: String,
+    pub(crate) temperature: f32,
+}
+
+/// The world's sky: the dimension, the time of day and the weather (`native_environment`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeEnvironment {
+    pub(crate) dimension: &'static str,
+    pub(crate) day_time: i64,
+    pub(crate) rain: f32,
+    pub(crate) thunder: f32,
 }
 
 /// A native mod as Options > Mods lists it (`native_mods`).
@@ -284,6 +474,74 @@ impl Game<'_> {
     ) {
         let _ = (context, phase, error_text);
     }
+    /// The destroy progress per tick of the block at `pos` is multiplied by `factor`: set it
+    /// (1 is as it is). Called wherever the progress is counted, on the client and on the server.
+    /// Module `mining` 1.
+    pub(super) fn native_dig_speed(&self, pos: [i32; 3], factor: &mut f32) {
+        let _ = (pos, factor);
+    }
+    /// A dig of the block at `pos` begins: set `progress` to where it starts from (0 is the
+    /// start). Module `mining` 1.
+    pub(super) fn native_dig_resume(&self, pos: [i32; 3], progress: &mut f32) {
+        let _ = (pos, progress);
+    }
+    /// The player left a dig of the block at `pos` (or went on to the next block) at `progress`
+    /// of its destroy progress, counting what `native_dig_resume` gave. Module `mining` 1.
+    pub(super) fn native_dig_stop(&mut self, pos: [i32; 3], progress: f32) {
+        let _ = (pos, progress);
+    }
+    /// The sliders of mod `mod_id`'s settings page, under its buttons: push them when it is
+    /// yours. Asked again each time the page opens and after each change. Module
+    /// `mod-settings` 1.
+    pub(super) fn native_settings_sliders(
+        &mut self,
+        mod_id: &str,
+        sliders: &mut Vec<NativeSlider>,
+    ) {
+        let _ = (mod_id, sliders);
+    }
+    /// Slider `index` of mod `mod_id`'s settings page moved to `value` (0..1); called while it is
+    /// dragged, so keep the work small. Module `mod-settings` 1.
+    pub(super) fn native_settings_slider(&mut self, mod_id: &str, index: usize, value: f32) {
+        let _ = (mod_id, index, value);
+    }
+    /// The fog is set for the frame: change `fog` to change what the camera sees. Module `fog` 1.
+    pub(super) fn native_fog(&self, fog: &mut NativeFog) {
+        let _ = fog;
+    }
+    /// The light sources the dynamic lights gather this frame (the player's, the mobs' and the
+    /// dropped items'): remove or change them. Module `lights` 1.
+    pub(super) fn native_light_sources(&self, sources: &mut Vec<NativeLightSource>) {
+        let _ = sources;
+    }
+    /// A player's break is about to take the block at `pos`, which still stands. Module
+    /// `mining` 1.
+    pub(super) fn native_block_breaking(&mut self, pos: [i32; 3]) {
+        let _ = pos;
+    }
+    /// A player's break took the block at `pos` out (after `native_block_breaking`). Module
+    /// `mining` 1.
+    pub(super) fn native_block_broken(&mut self, pos: [i32; 3]) {
+        let _ = pos;
+    }
+    /// The player hit the water: a jump or a fall into it, at `feet`. Module `player-events` 2.
+    pub(super) fn native_splash(&mut self, feet: [f64; 3]) {
+        let _ = feet;
+    }
+    /// The player stepped on the block `step.floor` (one the game would play a step sound for, not
+    /// muffled in water): set `handled` when the mod played its own, and the vanilla step stays
+    /// quiet. Module `player-events` 1.
+    pub(super) fn native_step(&mut self, step: &NativeStep, handled: &mut bool) {
+        let _ = (step, handled);
+    }
+    /// The player jumped from `feet`. Module `player-events` 1.
+    pub(super) fn native_jump(&mut self, feet: [f64; 3]) {
+        let _ = feet;
+    }
+    /// The player landed from a fall at `feet`. Module `player-events` 1.
+    pub(super) fn native_land(&mut self, feet: [f64; 3]) {
+        let _ = feet;
+    }
     /// The HUD (not drawn under F1), after the minimap: place a box with
     /// `corners.place` (boxes stack away from their edge) and draw it with
     /// `native_fill` and `native_text`. Skip a corner `native_corner_shown`
@@ -388,6 +646,220 @@ impl Game<'_> {
         let color = rgba(r, g, b, 0xFF);
         batch.text_styled(&self.gui.atlas, &Text::literal(text), x, y, color, shadow);
     }
+    /// Sets how much brighter (above 1) or darker (below 1) the picture should be than the light
+    /// says, for the shader packs (`frame.eye_adaptation.x`); call it once a tick, the frame goes
+    /// smoothly from one call's value to the next. 1 is none. Module `frame-exposure` 1.
+    pub(super) fn native_set_exposure(&mut self, gain: f32) {
+        let shift = if gain.is_finite() {
+            gain.clamp(0.1, 4.0) - 1.0
+        } else {
+            0.0
+        };
+        let e = &mut self.native_engine.exposure;
+        *e = [e[1], shift];
+    }
+    /// The exposure shift the frame uses, `partial` of the way from the last tick to this one.
+    pub(super) fn native_exposure_shift(&self, partial: f32) -> f32 {
+        let [before, now] = self.native_engine.exposure;
+        before + (now - before) * partial
+    }
+    /// Whether the player sneaks. Module `mining` 1.
+    pub(super) fn native_sneaking(&self) -> bool {
+        self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+    }
+    /// Whether the player is in creative mode. Module `mining` 1.
+    pub(super) fn native_creative(&self) -> bool {
+        self.creative
+    }
+    /// The world's game time, in ticks. Module `mining` 1.
+    pub(super) fn native_game_time(&self) -> i64 {
+        self.world.game_time
+    }
+    /// Breaks the block at `pos` as the player breaks it: its drops, its events, the tool's wear
+    /// (unless `native_pause_tool_wear`). False where it failed. Module `mining` 1.
+    pub(super) fn native_break_block(&mut self, pos: [i32; 3]) -> bool {
+        self.break_block_as_player(pos).is_ok()
+    }
+    /// While paused the held tool does not wear for the blocks the player breaks. Module
+    /// `mining` 1.
+    pub(super) fn native_pause_tool_wear(&mut self, paused: bool) {
+        self.native_engine.wear_paused = paused;
+    }
+    /// Whether the tool's wear is paused (`mine_block_with_held`).
+    pub(super) fn native_wear_paused(&self) -> bool {
+        self.native_engine.wear_paused
+    }
+    /// `uses` more uses of the held tool: its wear per block, with Unbreaking. Module `mining` 1.
+    pub(super) fn native_wear_held(&mut self, uses: usize) {
+        for _ in 0..uses {
+            let Some(stack) = self.inventory[self.selected].clone() else {
+                return;
+            };
+            let Some((per_block, max)) = self
+                .res
+                .items()
+                .get(&stack.item)
+                .and_then(|i| Some((i.tool_damage_per_block?, i.max_damage)))
+            else {
+                return;
+            };
+            if per_block == 0 || max == 0 {
+                return;
+            }
+            let loss = self.wear(&stack, per_block);
+            if let Some(held) = self.inventory[self.selected].as_mut() {
+                held.damage += loss;
+                if held.damage >= max {
+                    self.inventory[self.selected] = None;
+                    return;
+                }
+            }
+        }
+    }
+    /// The destroy progress factor mods ask for at `pos` (`native_dig_speed`).
+    pub(super) fn dig_scale(&self, pos: [i32; 3]) -> f32 {
+        let mut factor = 1.0;
+        self.native_dig_speed(pos, &mut factor);
+        if factor.is_finite() {
+            factor.clamp(0.01, 100.0)
+        } else {
+            1.0
+        }
+    }
+    /// Where a dig of the block at `pos` starts from (`native_dig_resume`).
+    pub(super) fn dig_resume(&self, pos: [i32; 3]) -> f32 {
+        let mut progress = 0.0;
+        self.native_dig_resume(pos, &mut progress);
+        if progress.is_finite() {
+            progress.clamp(0.0, 0.99)
+        } else {
+            0.0
+        }
+    }
+    /// Whether a mod draws the block at `pos` thin (no crack goes over it).
+    pub(super) fn native_thin_at(&self, pos: [i32; 3]) -> bool {
+        self.native_engine.thin.contains_key(&pos)
+    }
+    /// Sets the blocks the mesher draws thin: these, and no others. Their neighbours see them
+    /// open. Call it when they change (it does nothing when they have not). Module
+    /// `block-views` 1.
+    pub(super) fn native_set_thin_blocks(&mut self, blocks: &[NativeThinBlock]) {
+        use horizon_client::mesher::{ChopView, ChopViews};
+        use horizon_world::chunk::BlockState;
+        let registry = &self.pack.assets.registry;
+        let hollow = registry
+            .resolve(&BlockState {
+                name: "minecraft:oak_fence".into(),
+                properties: Default::default(),
+            })
+            .ok()
+            .map(|id| id.0);
+        let Some(hollow) = hollow else {
+            return;
+        };
+        let wanted: std::collections::HashMap<[i32; 3], ChopView> = blocks
+            .iter()
+            .filter_map(|b| {
+                let log = registry
+                    .resolve(&BlockState {
+                        name: b.name.clone(),
+                        properties: b.properties.clone(),
+                    })
+                    .ok()?
+                    .0;
+                let axis = match b.properties.get("axis").map(String::as_str) {
+                    Some("x") => 0,
+                    Some("z") => 2,
+                    _ => 1,
+                };
+                Some((
+                    b.pos,
+                    ChopView {
+                        log,
+                        hollow,
+                        axis,
+                        width: b.width,
+                    },
+                ))
+            })
+            .collect();
+        if wanted == self.native_engine.thin {
+            return;
+        }
+        // The sections that show a changed block, and the ones next to it, which see it open.
+        let changed: Vec<[i32; 3]> = wanted
+            .keys()
+            .filter(|p| wanted.get(*p) != self.native_engine.thin.get(*p))
+            .chain(
+                self.native_engine
+                    .thin
+                    .keys()
+                    .filter(|p| !wanted.contains_key(*p)),
+            )
+            .copied()
+            .collect();
+        for p in changed {
+            for d in [-1, 1, 0] {
+                for (dx, dy, dz) in [(d, 0, 0), (0, d, 0), (0, 0, d)] {
+                    let sy = (p[1] + dy - horizon_client::chunk::MIN_Y) >> 4;
+                    self.world
+                        .dirty_sections
+                        .insert(((p[0] + dx) >> 4, sy, (p[2] + dz) >> 4));
+                }
+            }
+        }
+        self.streaming.chop = if wanted.is_empty() {
+            None
+        } else {
+            Some(ChopViews::new(wanted.clone()))
+        };
+        self.native_engine.thin = wanted;
+    }
+    /// The block at `x`, `y`, `z`, or `None` where it is not loaded. Module `world-read` 1.
+    pub(super) fn native_block(&self, x: i32, y: i32, z: i32) -> Option<NativeBlock> {
+        let state = self.world.block(x, y, z);
+        let info = self.pack.assets.registry.state(state)?;
+        Some(NativeBlock {
+            name: info.name.clone(),
+            properties: info.properties.clone(),
+            step_sound: self.res.facts().get(state).sounds.step.to_string(),
+        })
+    }
+    /// Whether the block `name` is in block tag `tag` (`minecraft:logs`). Module `world-read` 1.
+    pub(super) fn native_block_in_tag(&self, tag: &str, name: &str) -> bool {
+        self.res.items().block_in_tag(tag, name)
+    }
+    /// Whether the game knows the sound event `event` (a resource pack's too). Module `sound` 1.
+    pub(super) fn native_has_sound(&self, event: &str) -> bool {
+        self.audio.has_event(event)
+    }
+    /// Plays the sound event `event` at `at` (the listener's own when it is `None`). Module
+    /// `sound` 1.
+    pub(super) fn native_play_sound(
+        &mut self,
+        event: &str,
+        at: Option<[f64; 3]>,
+        volume: f32,
+        pitch: f32,
+    ) {
+        self.audio.play(event, at, volume, pitch);
+    }
+    /// Whether a step of the player on `floor` was played by a native mod.
+    pub(super) fn native_stepped(
+        &mut self,
+        floor: [i32; 3],
+        feet: [f64; 3],
+        sprinting: bool,
+    ) -> bool {
+        let mut handled = false;
+        let step = NativeStep {
+            floor,
+            feet,
+            sprinting,
+        };
+        self.native_step(&step, &mut handled);
+        handled
+    }
     /// The player, in a world.
     pub(super) fn native_player(&self) -> Option<NativePlayer> {
         let p = self.player.as_ref()?;
@@ -398,7 +870,168 @@ impl Game<'_> {
             yaw: self.yaw,
             pitch: self.pitch,
             dimension: self.dim.id(),
+            eye_height: p.dimensions.eye_height,
+            velocity: [p.velocity.x, p.velocity.y, p.velocity.z],
+            riding: self.riding.is_some(),
         })
+    }
+    /// Whether a world is open: a player, and not the main menu. API 5, `world-read` 2.
+    pub(super) fn native_in_world(&self) -> bool {
+        self.player.is_some() && self.title.is_none()
+    }
+    /// The block state at `x`, `y`, `z` (an id that stays the same for the run), for
+    /// `native_state_info`. API 5, `world-read` 2.
+    pub(super) fn native_state_at(&self, x: i32, y: i32, z: i32) -> u32 {
+        self.world.block(x, y, z).0
+    }
+    /// What state `state` is made of. API 5, `world-read` 2.
+    pub(super) fn native_state_info(&self, state: u32) -> NativeStateInfo {
+        let facts = self
+            .res
+            .facts()
+            .get(horizon_world::registry::BlockStateId(state));
+        NativeStateInfo {
+            name: facts.name.to_string(),
+            solid: facts.solid_render,
+            water: facts.fluid == horizon_client::blocks::Fluid::Water,
+        }
+    }
+    /// Whether the block at `x`, `y`, `z` is opaque. API 5, `world-read` 2.
+    pub(super) fn native_solid_at(&self, x: i32, y: i32, z: i32) -> bool {
+        self.res.facts().get(self.world.block(x, y, z)).solid_render
+    }
+    /// Whether the block at `x`, `y`, `z` holds water. API 5, `world-read` 2.
+    pub(super) fn native_water_at(&self, x: i32, y: i32, z: i32) -> bool {
+        self.res.facts().get(self.world.block(x, y, z)).fluid
+            == horizon_client::blocks::Fluid::Water
+    }
+    /// The light at `x`, `y`, `z`: sky light in the high four bits, block light in the low.
+    /// API 5, `world-read` 2.
+    pub(super) fn native_light_at(&self, x: i32, y: i32, z: i32) -> u8 {
+        self.world.light(x, y, z)
+    }
+    /// The biome at `x`, `y`, `z`, or `None` where it is not loaded. API 5, `world-read` 2.
+    pub(super) fn native_biome_at(&self, x: i32, y: i32, z: i32) -> Option<NativeBiome> {
+        let chunk = self.world.chunks.get(&(x >> 4, z >> 4))?;
+        let biome = self.res.biomes().list.get(chunk.biome(x, y, z) as usize)?;
+        Some(NativeBiome {
+            name: biome.name.clone(),
+            temperature: biome.temperature,
+        })
+    }
+    /// The dimension, the time of day and the weather now. API 5, `world-read` 2.
+    pub(super) fn native_environment(&self) -> NativeEnvironment {
+        let (rain, thunder) = self.world.weather.levels(1.0);
+        NativeEnvironment {
+            dimension: self.dim.id(),
+            day_time: self.world.day_time,
+            rain,
+            thunder,
+        }
+    }
+    /// The first y over the highest block at `x`, `z` that stops rain (the ground, or water).
+    /// API 6, `world-read` 3.
+    pub(super) fn native_top_y(&self, x: i32, z: i32) -> i32 {
+        self.rain_height(x, z)
+    }
+    /// Whether the chunk with the block column `x`, `z` is loaded. API 6, `world-read` 3.
+    pub(super) fn native_chunk_loaded(&self, x: i32, z: i32) -> bool {
+        self.world.chunks.contains_key(&(x >> 4, z >> 4))
+    }
+    /// Whether the block at `x`, `y`, `z` is water that falls. API 6, `world-read` 3.
+    pub(super) fn native_falling_water_at(&self, x: i32, y: i32, z: i32) -> bool {
+        let facts = self.res.facts().get(self.world.block(x, y, z));
+        facts.fluid == horizon_client::blocks::Fluid::Water && facts.fluid_falling
+    }
+    /// Plays the effect particle `kind` (`horizon_wave`, `horizon_wake`, `horizon_ripple`,
+    /// `horizon_splash`, `horizon_splash_foam`, `horizon_splash_ring`, `horizon_cascade`,
+    /// `horizon_spray`: their sprites are the resource pack's, in `particles/<kind>.json`) at
+    /// `at`, moving `velocity` blocks a tick. `scale` is its size; `params` are its own: a wave's
+    /// heading about the vertical in radians and its life in ticks. `always` shows it from any
+    /// distance. False for a kind it does not know. API 6, `particles` 1.
+    pub(super) fn native_particle(
+        &mut self,
+        kind: &str,
+        at: [f64; 3],
+        velocity: [f64; 3],
+        scale: f32,
+        params: [f32; 4],
+        always: bool,
+    ) -> bool {
+        let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) else {
+            return false;
+        };
+        let mut options = horizon_client::particles::ParticleOptions::simple(ty);
+        options.scale = scale;
+        options.color = params;
+        self.particles
+            .add_with(&options, at, velocity, always, always);
+        true
+    }
+    /// The mobs and boats the player knows of: where they are and were. API 6, `entities-read` 1.
+    pub(super) fn native_movers(&self) -> Vec<NativeMover> {
+        let mut movers = Vec::with_capacity(self.mobs.len() + self.boats.len());
+        for boat in &self.boats {
+            movers.push(NativeMover {
+                id: u32::MAX,
+                boat: true,
+                position: [boat.position.x, boat.position.y, boat.position.z],
+                previous: [boat.previous.x, boat.previous.y, boat.previous.z],
+                width: 1.4,
+            });
+        }
+        for mob in &self.mobs {
+            movers.push(NativeMover {
+                id: mob.id,
+                boat: false,
+                position: [mob.position.x, mob.position.y, mob.position.z],
+                previous: [mob.previous.x, mob.previous.y, mob.previous.z],
+                width: mob.width(),
+            });
+        }
+        movers
+    }
+    /// Starts a sound from `file` that plays at the listener until stopped (`looping` or to its
+    /// end), from `offset` (0 to 1) of its length; its id, or `None` where there is no output.
+    /// The sound follows the Ambient volume. API 5, `audio-layers` 1.
+    pub(super) fn native_layer_start(
+        &mut self,
+        file: &std::path::Path,
+        gain: f32,
+        looping: bool,
+        offset: f32,
+    ) -> Option<u64> {
+        self.audio.layer_start(file, gain, looping, offset)
+    }
+    /// Sets the gain of layer `id`. API 5, `audio-layers` 1.
+    pub(super) fn native_layer_set(&mut self, id: u64, gain: f32) {
+        self.audio.layer_set(id, gain);
+    }
+    /// Stops layer `id`. API 5, `audio-layers` 1.
+    pub(super) fn native_layer_stop(&mut self, id: u64) {
+        self.audio.layer_stop(id);
+    }
+    /// Whether layer `id` has played to its end. API 5, `audio-layers` 1.
+    pub(super) fn native_layer_done(&self, id: u64) -> bool {
+        self.audio.layer_done(id)
+    }
+    /// The volume of the layers (0 to 1 and over), on top of the master. API 5, `audio-layers` 1.
+    pub(super) fn native_layer_volume(&mut self, volume: f32) {
+        self.audio.ambient_volume = volume;
+    }
+    /// The room's reverb: its level, its decay and the share every new sound sends to it.
+    /// API 5, `audio-layers` 1.
+    pub(super) fn native_set_reverb(&mut self, level: f32, decay: f32, send: f32) {
+        self.audio.set_reverb(level, decay, send);
+    }
+    /// The sounds playing in the world: their ids and where they are. API 5, `audio-layers` 1.
+    pub(super) fn native_voices(&self) -> Vec<(u64, [f64; 3])> {
+        self.audio.physics_voices()
+    }
+    /// Muffles sound `id`: the low-pass cutoff (0 to 1), its send to the reverb and how much
+    /// walls take off its volume (1 is none). API 5, `audio-layers` 1.
+    pub(super) fn native_voice_filter(&mut self, id: u64, cutoff: f32, send: f32, occlusion: f32) {
+        self.audio.set_voice_filter(id, cutoff, send, occlusion);
     }
     /// The frame counter: frames in the last second, the slowest frame and
     /// the 1% low of the last 5 seconds, in frames per second.
@@ -530,9 +1163,11 @@ impl Game<'_> {
         for m in mods {
             let mut buttons = Vec::new();
             self.native_settings(&m.id, &mut buttons);
+            let sliders = self.native_slider_rows(&m.id);
             let page = NativePage {
                 keys: m.keys,
                 buttons,
+                sliders,
             };
             self.settings.mods.installed.push(Installed {
                 id: m.id,
@@ -561,9 +1196,57 @@ impl Game<'_> {
         };
         let mut buttons = Vec::new();
         self.native_settings(&id, &mut buttons);
+        let sliders = self.native_slider_rows(&id);
         let row = self.settings.mods.installed.get_mut(i);
         if let Some(page) = row.and_then(|m| m.native.as_mut()) {
             page.buttons = buttons;
+            page.sliders = sliders;
+        }
+    }
+    /// The sliders of mod `id`'s page, as the page keeps them.
+    fn native_slider_rows(&mut self, id: &str) -> Vec<mod_list::NativeSliderRow> {
+        let mut sliders = Vec::new();
+        self.native_settings_sliders(id, &mut sliders);
+        sliders
+            .into_iter()
+            .map(|s| mod_list::NativeSliderRow {
+                label: s.label,
+                value: if s.value.is_finite() {
+                    s.value.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                },
+            })
+            .collect()
+    }
+    /// Slider `k` of native mod `i`'s page moved: the mod is told (the labels stay while it is
+    /// dragged, so the handle does not jump).
+    pub(super) fn native_slider_event(&mut self, i: usize, k: usize) {
+        let Some(row) = self.settings.mods.installed.get(i) else {
+            return;
+        };
+        let value = row
+            .native
+            .as_ref()
+            .and_then(|p| p.sliders.get(k))
+            .map(|s| s.value);
+        let id = row.id.clone();
+        if let Some(value) = value {
+            self.native_settings_slider(&id, k, value);
+            // The label carries the value: asked again, the position kept as it is dragged.
+            let mut sliders = Vec::new();
+            self.native_settings_sliders(&id, &mut sliders);
+            if let Some(page) = self
+                .settings
+                .mods
+                .installed
+                .get_mut(i)
+                .and_then(|m| m.native.as_mut())
+            {
+                for (slot, fresh) in page.sliders.iter_mut().zip(sliders) {
+                    slot.label = fresh.label;
+                }
+            }
         }
     }
     /// A key event for `native_key`.
@@ -717,6 +1400,38 @@ mod tests {
             );
         }
         assert_eq!(names, declared);
+    }
+
+    /// The parts of the native API (`NATIVE_MODULES`) and the catalog's `modules` list the same
+    /// names at the same versions, and the hooks and helpers they name exist.
+    #[test]
+    fn the_api_parts_match_the_catalog() {
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../native-hooks.json")).unwrap();
+        let source = include_str!("native_hooks.rs");
+        let listed: Vec<(&str, u64)> = catalog["modules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| (m["name"].as_str().unwrap(), m["version"].as_u64().unwrap()))
+            .collect();
+        let coded: Vec<(&str, u64)> = super::NATIVE_MODULES
+            .iter()
+            .map(|(name, version)| (*name, u64::from(*version)))
+            .collect();
+        assert_eq!(listed, coded);
+        for module in catalog["modules"].as_array().unwrap() {
+            for key in ["hooks", "helpers"] {
+                for name in module[key].as_array().into_iter().flatten() {
+                    let name = name.as_str().unwrap();
+                    assert!(
+                        source.contains(&format!("fn native_{name}(")),
+                        "{key} {name} of {}",
+                        module["name"]
+                    );
+                }
+            }
+        }
     }
 
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left

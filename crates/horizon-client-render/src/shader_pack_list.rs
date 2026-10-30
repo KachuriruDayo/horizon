@@ -14,13 +14,16 @@ pub enum Kind {
     Classic,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     /// The folder's or file's name in `shaderpacks`: what the pick saves.
     pub file: String,
     /// The pack's own name for Horizon's packs, else `file`.
     pub title: String,
     pub kind: Kind,
+    /// The manifest's id and options, for Horizon's own packs: what the pack's settings are.
+    pub id: String,
+    pub options: Vec<horizon_shader_api::PackOption>,
 }
 
 /// The packs in `dir`, Horizon's first, each kind by title. A missing folder has none.
@@ -53,11 +56,16 @@ fn entry(path: &Path) -> Option<Entry> {
                 .ok()
                 .map(|p| p.manifest)
         };
-        let title = manifest.map_or_else(|| file.clone(), |m| m.name);
+        let (title, id, options) = manifest.map_or_else(
+            || (file.clone(), String::new(), Vec::new()),
+            |m| (m.name, m.id, m.options),
+        );
         return Some(Entry {
             file,
             title,
             kind: Kind::Horizon,
+            id,
+            options,
         });
     }
     let zip = path.is_file()
@@ -68,6 +76,8 @@ fn entry(path: &Path) -> Option<Entry> {
         title: file.clone(),
         file,
         kind: Kind::Classic,
+        id: String::new(),
+        options: Vec::new(),
     })
 }
 

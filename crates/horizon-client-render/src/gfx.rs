@@ -81,6 +81,7 @@ mod lod;
 mod native_material;
 mod native_pack;
 mod native_post;
+mod native_shadow;
 mod native_sky;
 mod occlusion;
 mod pack_atlas;
@@ -3991,7 +3992,14 @@ impl Renderer {
             .as_ref()
             .and_then(|p| p.1.as_ref())
             .filter(|_| !frame.title)
-            .and_then(|p| p.shadow_view(frame));
+            .and_then(|p| p.shadow_view(frame))
+            // One of Horizon's own packs asks for the sun's shadow map instead.
+            .or_else(|| {
+                self.native
+                    .as_ref()
+                    .filter(|_| !frame.title)
+                    .and_then(|n| n.shadow.as_ref()?.view(frame))
+            });
         let mut shadow_visible = std::mem::take(&mut self.shadow_visible);
         shadow_visible.clear();
         if let Some(v) = &shadow_view {
@@ -4753,7 +4761,12 @@ impl Renderer {
                 .size()
                 .filter(|_| scaled.is_some())
                 .unwrap_or([self.config.width, self.config.height]);
-            native.frame.write(&self.queue, frame, size);
+            let shadow = native
+                .shadow
+                .as_ref()
+                .zip(shadow_view.as_ref())
+                .map(|(map, view)| (map, view.cull, view.light));
+            native.frame.write(&self.queue, frame, size, shadow);
             if let Some(t) = &mut native.timing {
                 t.begin(&self.device, &self.queue);
                 native_sky_pass =
@@ -4792,6 +4805,39 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.group, &[]);
             sky.draw(&mut pass, &native.frame);
+        }
+        // One of Horizon's own packs asking for the sun's shadow map: the terrain's depth from
+        // the sun, drawn from the lists built for the shadow camera, before the world reads it.
+        if let Some(view) = &shadow_view
+            && let Some(map) = self.native.as_ref().and_then(|n| n.shadow.as_ref())
+        {
+            let flat = self.flat.as_ref().filter(|_| flat_frame);
+            if let Some(mut pass) = map.begin(&mut encoder, &self.queue, view.cull, flat.is_some())
+            {
+                pass.set_bind_group(0, &self.group, &[]);
+                match flat {
+                    Some(flat) => {
+                        let [first, translucent] = flat.shadow_calls;
+                        flat.draw_with(
+                            &mut pass,
+                            &flat.calls[first..translucent],
+                            |p| self.arena.buffer(p),
+                            |_, _| {},
+                        );
+                    }
+                    None => {
+                        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.set_vertex_buffer(1, self.instances.slice(..));
+                        self.draw_sections(
+                            &mut pass,
+                            &self.indirect,
+                            0,
+                            shadow_first,
+                            shadow_solid,
+                        );
+                    }
+                }
+            }
         }
         // One of Horizon's own packs with a material stage: terrain draws with its pipelines,
         // which read the pack's frame at group 3.

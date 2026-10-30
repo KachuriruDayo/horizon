@@ -40,12 +40,19 @@ impl Game<'_> {
     /// Builds the pack at `path` when its files changed since it was last read.
     pub(super) fn tick_native_shader_pack(&mut self, path: &Path) {
         let now = Instant::now();
+        // What the player chose for the pack's options: a change builds the pack again.
+        let saved = self.settings.horizon.shader_options.clone();
         let state = &mut self.native_shaders;
         if state.looked.is_some_and(|t| now - t < LOOK_EVERY) {
             return;
         }
         state.looked = Some(now);
-        let stamp = fingerprint(path);
+        let stamp = fingerprint(path).map(|files| {
+            let mut hasher = std::hash::DefaultHasher::new();
+            files.hash(&mut hasher);
+            saved.hash(&mut hasher);
+            hasher.finish()
+        });
         if stamp == state.stamp {
             return;
         }
@@ -61,7 +68,14 @@ impl Game<'_> {
                 .manifest
                 .options
                 .iter()
-                .map(|o| (o.id.clone(), o.kind.default_constant()))
+                .map(|o| {
+                    let chosen = horizon_shader_api::chosen(&saved, &pack.manifest.id, &o.id)
+                        .and_then(|text| o.kind.constant_of(text));
+                    (
+                        o.id.clone(),
+                        chosen.unwrap_or_else(|| o.kind.default_constant()),
+                    )
+                })
                 .collect();
             let labels = renderer
                 .set_native_shader_pack(Some((report, constants)))

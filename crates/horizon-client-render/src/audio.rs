@@ -39,9 +39,60 @@ struct Channel {
     looping: bool,
     at: [f32; 3],
     relative: bool,
+    /// Sound Physics: the low-pass cutoff, 1 for none, down to 0 for muffled (`set_filter`).
+    cutoff: f32,
+    /// The low-pass filter's state.
+    lowpassed: f32,
+    /// How much of the sound goes to the shared reverb, 0 to 1; below 0: the room's own
+    /// (`Mixer::room_send`), which a sound has from its first sample.
+    send: f32,
+    /// A gain on top of the sound's own, for what stands between it and the listener.
+    occlusion: f32,
+}
+/// A shared reverb: four combs and two all-passes on a mono send bus (a Freeverb in small), whose
+/// decay and level Sound Physics sets from the room around the listener.
+struct Reverb {
+    combs: [(Vec<f32>, usize, f32); 4],
+    allpasses: [(Vec<f32>, usize); 2],
+}
+impl Reverb {
+    fn new(rate: u32) -> Self {
+        let scale = f64::from(rate) / 44100.0;
+        let size = |n: usize| ((n as f64 * scale) as usize).max(1);
+        Self {
+            combs: [1116, 1188, 1277, 1356].map(|n| (vec![0.0; size(n)], 0, 0.0)),
+            allpasses: [556, 441].map(|n| (vec![0.0; size(n)], 0)),
+        }
+    }
+    /// One sample of the send bus in, the reverb tail out; `decay` 0 (short) to 1 (long).
+    fn process(&mut self, input: f32, decay: f32) -> f32 {
+        let feedback = 0.70 + 0.27 * decay.clamp(0.0, 1.0);
+        let damp = 0.25;
+        let mut out = 0.0;
+        for (buffer, at, held) in &mut self.combs {
+            let y = buffer[*at];
+            *held = y * (1.0 - damp) + *held * damp;
+            buffer[*at] = input * 0.05 + *held * feedback;
+            *at = (*at + 1) % buffer.len();
+            out += y;
+        }
+        for (buffer, at) in &mut self.allpasses {
+            let y = buffer[*at];
+            buffer[*at] = out + y * 0.5;
+            out = y - out;
+            *at = (*at + 1) % buffer.len();
+        }
+        out
+    }
 }
 #[derive(Default)]
 struct Mixer {
+    /// Sound Physics: the reverb's level and decay for the room the listener is in.
+    reverb_level: f32,
+    reverb_decay: f32,
+    /// What a sound with no send of its own sends to the reverb.
+    room_send: f32,
+    reverb: Option<Reverb>,
     channels: HashMap<ChannelId, Channel>,
     listener: [f64; 3],
     listener_yaw: f32,
@@ -136,6 +187,15 @@ fn attach(mixer: &Mutex<Mixer>, channel: ChannelId, samples: Samples, looping: b
         c.looping |= looping;
     }
 }
+/// Moves a layer's playback to `fraction` of its length (once its samples are there).
+fn seek(mixer: &Mutex<Mixer>, channel: ChannelId, fraction: f32) {
+    if let Ok(mut m) = mixer.lock()
+        && let Some(c) = m.channels.get_mut(&channel)
+        && let Some((samples, _)) = &c.samples
+    {
+        c.position = (samples.len() as f64 * f64::from(fraction.clamp(0.0, 0.95))).floor();
+    }
+}
 /// The open output stream. A build without the `audio` feature (the server build, which must not
 /// need libasound) never has one.
 #[cfg(feature = "audio")]
@@ -152,6 +212,11 @@ pub struct Audio {
     pub listener: [f64; 3],
     pub listener_yaw: f32,
     pub master: f32,
+    /// The ambient sounds' own volume (a setting of Horizon's), a multiplier.
+    pub ambient_volume: f32,
+    /// The channels of the ambient layers, which a pause stops where they are and a resume lets
+    /// go on from.
+    layers: Vec<u64>,
     /// Seeds of positional plays (the client level random's `nextLong`).
     random: LegacyRandom,
     /// A `SoundSource` index the next sound plays on (`/playsound`).
@@ -233,6 +298,10 @@ impl Backend for MixerBackend {
                 looping: false,
                 at: [0.0; 3],
                 relative: false,
+                cutoff: 1.0,
+                lowpassed: 0.0,
+                send: -1.0,
+                occlusion: 1.0,
             },
         );
         Some(id)
@@ -420,7 +489,9 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
             ]
         };
         let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
-        let gain = c.gain.clamp(0.0, 1.0) * distance_gain(c.linear, distance);
+        let gain = c.gain.clamp(0.0, 1.0)
+            * c.occlusion.clamp(0.0, 1.0)
+            * distance_gain(c.linear, distance);
         // Relative sources are already in OpenAL's listener space (-Z ahead).
         let [left, right] = if c.relative {
             stereo_gains(d[0] as f32, d[1] as f32, -d[2] as f32)
@@ -431,14 +502,30 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
         let step = f64::from(*source_rate) / f64::from(rate) * f64::from(c.pitch.max(0.0));
         voices.push((*id, [left, right, gain], step));
     }
+    let reverb_level = mixer.reverb_level.clamp(0.0, 1.0);
+    let reverb_decay = mixer.reverb_decay;
+    let room_send = mixer.room_send;
+    let mut send_bus = if reverb_level > 0.001 {
+        vec![0.0f32; data.len() / channels.max(1)]
+    } else {
+        Vec::new()
+    };
     for (id, [left, right, gain], step) in voices {
         let Some(c) = mixer.channels.get_mut(&id) else {
             continue;
         };
+        // One-pole low-pass: 300 Hz muffled up to 20 kHz open.
+        let cutoff = c.cutoff.clamp(0.0, 1.0);
+        let lowpass = if cutoff >= 0.999 {
+            1.0
+        } else {
+            let hz = 300.0 * (66.0f32).powf(cutoff);
+            1.0 - (-std::f32::consts::TAU * hz / rate as f32).exp()
+        };
         let Some((samples, _)) = c.samples.clone() else {
             continue;
         };
-        for frame in data.chunks_mut(channels) {
+        for (n, frame) in data.chunks_mut(channels).enumerate() {
             let mut i = c.position as usize;
             if i + 1 >= samples.len() {
                 if c.looping && samples.len() > 1 {
@@ -450,7 +537,20 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
                 }
             }
             let t = (c.position - i as f64) as f32;
-            let s = samples[i] * (1.0 - t) + samples[i + 1] * t;
+            let mut s = samples[i] * (1.0 - t) + samples[i + 1] * t;
+            if lowpass < 1.0 {
+                c.lowpassed += lowpass * (s - c.lowpassed);
+                s = c.lowpassed;
+            }
+            if let Some(bus) = send_bus.get_mut(n) {
+                // Only sounds in the world go to the reverb: not the ones played at the listener.
+                let send = if c.send < 0.0 {
+                    if c.relative { 0.0 } else { room_send }
+                } else {
+                    c.send
+                };
+                *bus += s * gain * send;
+            }
             if channels >= 2 {
                 frame[0] += s * left;
                 frame[1] += s * right;
@@ -459,6 +559,15 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
                 frame[0] += s * gain;
             }
             c.position += step;
+        }
+    }
+    if !send_bus.is_empty() {
+        let reverb = mixer.reverb.get_or_insert_with(|| Reverb::new(rate));
+        for (frame, input) in data.chunks_mut(channels).zip(send_bus) {
+            let wet = reverb.process(input, reverb_decay) * reverb_level;
+            for s in frame {
+                *s += wet;
+            }
         }
     }
     // Limit the whole buffer together, preserving waveform and stereo balance
@@ -629,6 +738,8 @@ impl Audio {
             listener: [0.0; 3],
             listener_yaw: 0.0,
             master: 1.0,
+            ambient_volume: 1.0,
+            layers: Vec::new(),
             random: LegacyRandom::new(crate::sound_engine::unique_seed()),
             source_override: None,
             capture: None,
@@ -761,6 +872,112 @@ impl Audio {
         }
         self.engine.listening = self.record_heard;
     }
+    /// A sound from a file of its own, played apart from the sound events: a layer of the
+    /// ambient sounds (`ambient_sounds.rs`). It plays at the listener, centred, at `gain` times
+    /// the master and Ambient volumes, until stopped. `None` where there is no output.
+    pub fn layer_start(
+        &mut self,
+        file: &Path,
+        gain: f32,
+        looping: bool,
+        offset: f32,
+    ) -> Option<u64> {
+        if !self.backend.live {
+            return None;
+        }
+        let id = self.backend.create(false)?;
+        self.backend.with(id, |c| {
+            c.relative = true;
+            c.at = [0.0, 0.0, -1.0];
+            c.looping = looping;
+            c.gain = 0.0;
+        });
+        let key = format!("layer:{}", file.display());
+        let cached = self.backend.cache.lock().ok().and_then(|mut c| c.get(&key));
+        match cached {
+            Some(samples) => {
+                attach(&self.backend.mixer, id, samples, looping);
+                seek(&self.backend.mixer, id, offset);
+            }
+            None => {
+                let (mixer, cache) = (self.backend.mixer.clone(), self.backend.cache.clone());
+                let file = file.to_owned();
+                std::thread::spawn(move || {
+                    let samples = decode(&file).map(|(s, r)| (Arc::new(s), r));
+                    if let Ok(mut c) = cache.lock() {
+                        c.insert(key, samples.clone());
+                    }
+                    attach(&mixer, id, samples, looping);
+                    seek(&mixer, id, offset);
+                });
+            }
+        }
+        self.layer_set(id, gain);
+        self.layers.push(id);
+        Some(id)
+    }
+    /// The gain of a layer, before the master and Ambient volumes.
+    pub fn layer_set(&mut self, id: u64, gain: f32) {
+        let volume = self.master
+            * crate::settings::source_volume(crate::sound_engine::AMBIENT)
+            * self.ambient_volume;
+        self.backend.with(id, |c| c.gain = gain.max(0.0) * volume);
+    }
+    /// Stops a layer and frees its channel.
+    pub fn layer_stop(&mut self, id: u64) {
+        self.layers.retain(|l| *l != id);
+        self.backend.destroy(id);
+    }
+    /// Whether a layer has finished (or never started: its file did not load).
+    pub fn layer_done(&self, id: u64) -> bool {
+        self.backend
+            .mixer
+            .lock()
+            .map(|m| {
+                m.channels
+                    .get(&id)
+                    .is_none_or(|c| c.state == State::Stopped)
+            })
+            .unwrap_or(true)
+    }
+    /// The positional sounds playing now and where: what Sound Physics works on.
+    pub fn physics_voices(&self) -> Vec<(u64, [f64; 3])> {
+        let Ok(m) = self.backend.mixer.lock() else {
+            return Vec::new();
+        };
+        m.channels
+            .iter()
+            .filter(|(_, c)| {
+                !c.relative
+                    && c.samples.is_some()
+                    && c.state == State::Playing
+                    && c.linear.is_some()
+            })
+            .map(|(id, c)| {
+                (
+                    *id,
+                    [f64::from(c.at[0]), f64::from(c.at[1]), f64::from(c.at[2])],
+                )
+            })
+            .collect()
+    }
+    /// Sound Physics: what stands between a sound and the listener (`occlusion`, a gain),
+    /// how muffled it is (`cutoff`, 1 for not at all) and how much of it goes to the reverb.
+    pub fn set_voice_filter(&mut self, id: u64, cutoff: f32, send: f32, occlusion: f32) {
+        self.backend.with(id, |c| {
+            c.cutoff = cutoff;
+            c.send = send;
+            c.occlusion = occlusion;
+        });
+    }
+    /// Sound Physics: the reverb of the room the listener is in.
+    pub fn set_reverb(&mut self, level: f32, decay: f32, room_send: f32) {
+        if let Ok(mut m) = self.backend.mixer.lock() {
+            m.reverb_level = level;
+            m.reverb_decay = decay;
+            m.room_send = room_send;
+        }
+    }
     /// `SoundManager.tick(paused)`, once per client tick.
     pub fn tick(&mut self, paused: bool, ctx: &TickContext) {
         self.sync_volumes();
@@ -772,10 +989,16 @@ impl Audio {
             &[crate::sound_engine::MUSIC, crate::sound_engine::UI],
             &mut self.backend,
         );
+        for id in self.layers.clone() {
+            self.backend.pause(id);
+        }
     }
     /// `SoundManager.resume`.
     pub fn resume(&mut self) {
         self.engine.resume(&mut self.backend);
+        for id in self.layers.clone() {
+            self.backend.unpause(id);
+        }
     }
     /// `SoundManager.stop()`: every sound.
     pub fn stop_all(&mut self) {
@@ -790,6 +1013,10 @@ impl Audio {
         let mut cache = self.backend.cache.lock().unwrap();
         cache.entries.clear();
         cache.bytes = 0;
+    }
+    /// Whether a sound event is registered (a resource pack's sounds may be off).
+    pub fn has_event(&self, event: &str) -> bool {
+        self.engine.registry.contains(event)
     }
     /// Play a sound event at a world position, as `ClientLevel.playLocalSound`
     /// (a `SimpleSoundInstance` seeded from the level random), or relative to
@@ -1003,7 +1230,37 @@ mod tests {
             looping,
             at,
             relative: false,
+            cutoff: 1.0,
+            lowpassed: 0.0,
+            send: 0.0,
+            occlusion: 1.0,
         }
+    }
+
+    #[test]
+    fn a_sound_with_no_filter_mixes_as_before_and_a_wall_or_a_low_pass_quietens_it() {
+        let play = |cutoff: f32, occlusion: f32, send: f32, reverb: f32| {
+            let mut mixer = Mixer::default();
+            let tone: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.9).sin() * 0.5).collect();
+            let mut c = channel(tone, None, [0.0; 3], false);
+            c.relative = true;
+            c.at = [0.0, 0.0, -1.0];
+            c.cutoff = cutoff;
+            c.occlusion = occlusion;
+            c.send = send;
+            mixer.channels.insert(1, c);
+            mixer.reverb_level = reverb;
+            mixer.reverb_decay = 0.5;
+            let mut out = vec![0.0f32; 2 * 2400];
+            mix(&mut mixer, &mut out, 2, 48_000);
+            out.iter().map(|s| s * s).sum::<f32>()
+        };
+        let open = play(1.0, 1.0, 0.0, 0.0);
+        assert!(open > 1.0, "{open}");
+        // Behind a wall: quieter. Muffled: far less of a high tone. A reverb adds a tail.
+        assert!(play(1.0, 0.5, 0.0, 0.0) < open * 0.4);
+        assert!(play(0.1, 1.0, 0.0, 0.0) < open * 0.2);
+        assert!(play(1.0, 1.0, 1.0, 0.8) > open);
     }
 
     #[test]

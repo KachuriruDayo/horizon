@@ -147,6 +147,15 @@ particle_types! {
     PauseMobGrowth = "pause_mob_growth",
     ResetMobGrowth = "reset_mob_growth",
     BlockMarker = "block_marker",
+    // Horizon's own (effects.rs): not in the protocol registry, never sent.
+    HorizonCascade = "horizon_cascade",
+    HorizonSpray = "horizon_spray",
+    HorizonRipple = "horizon_ripple",
+    HorizonSplashRing = "horizon_splash_ring",
+    HorizonSplash = "horizon_splash",
+    HorizonSplashFoam = "horizon_splash_foam",
+    HorizonWave = "horizon_wave",
+    HorizonWake = "horizon_wake",
 }
 impl ParticleType {
     /// `ParticleType.getOverrideLimiter` (`ParticleTypes.register(name, true)`):
@@ -209,6 +218,10 @@ impl ParticleType {
             // VibrationSignalParticle, FireflyParticle, OverlayParticle.
             | Self::SculkCharge | Self::SculkChargePop | Self::Shriek
             | Self::Vibration | Self::Firefly | Self::Flash
+            // Horizon's waterfall effects.
+            | Self::HorizonCascade | Self::HorizonSpray | Self::HorizonRipple
+            | Self::HorizonSplashRing | Self::HorizonSplash | Self::HorizonSplashFoam
+            | Self::HorizonWave | Self::HorizonWake
             // SimpleAnimatedParticle and its subclasses: EndRodParticle,
             // SparkParticle (firework), SquidInkParticle, TotemParticle.
             | Self::EndRod | Self::Firework | Self::SquidInk | Self::GlowSquidInk

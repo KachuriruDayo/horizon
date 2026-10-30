@@ -3650,6 +3650,9 @@ struct SavedLodSampler<G: ChunkGenerator> {
     /// Reduced far detail: saved chunks only in tiles up to
     /// `SAVED_LOD_STRIDE_REDUCED` blocks a column.
     approximate: bool,
+    /// The generator's own tiles kept on disk between runs (`lod_cache`), if it can tell what
+    /// they depend on.
+    disk: Option<Arc<crate::lod_cache::LodCache>>,
 }
 impl<G: ChunkGenerator> SavedLodSampler<G> {
     fn saved_columns(&mut self, key: (i32, i32)) -> Option<LodSurfaces> {
@@ -3679,6 +3682,7 @@ impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
             cache: Default::default(),
             details: Vec::new(),
             approximate: self.approximate,
+            disk: self.disk.clone(),
         }))
     }
     fn set_approximate(&mut self, approximate: bool) {
@@ -3706,7 +3710,21 @@ impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
         details
     }
     fn grid(&mut self, x: i32, z: i32, stride: i32, side: usize) -> Vec<crate::lod::Column> {
-        let mut columns = self.inner.grid(x, z, stride, side);
+        // The generator's own tile: from disk when an earlier run kept it, else sampled (and kept).
+        let kept = self
+            .disk
+            .as_ref()
+            .and_then(|disk| disk.load(x, z, stride, side, self.approximate));
+        let mut columns = match kept {
+            Some(columns) => columns,
+            None => {
+                let columns = self.inner.grid(x, z, stride, side);
+                if let Some(disk) = &self.disk {
+                    disk.store(x, z, stride, self.approximate, &columns);
+                }
+                columns
+            }
+        };
         // Saved chunks show in tiles up to 16 blocks a column. With Reduced far
         // detail only up to 4 (within about a kilometre): coarser tiles keep
         // the generator's terrain, which saved chunks were made from, since
@@ -4057,12 +4075,26 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     }
     fn lod_sampler(self: Arc<Self>) -> Box<dyn crate::streaming::LodSampler> {
         let inner = ChunkGenerator::lod_sampler(self.inner.clone());
+        let disk = self.inner.lod_fingerprint().and_then(|generator| {
+            // The block states' numbers are in the tiles: a registry that numbers them
+            // differently (another version, other content) has other tiles.
+            let registry = self.registry.registry;
+            let mut names = registry.len().to_le_bytes().to_vec();
+            for index in (0..registry.len()).step_by(97) {
+                if let Some(state) = registry.state(BlockStateId(index as u32)) {
+                    names.extend_from_slice(state.name.as_bytes());
+                }
+            }
+            let fingerprint = crate::lod_cache::fingerprint(&[&generator.to_le_bytes(), &names]);
+            crate::lod_cache::LodCache::open(&self.save.root.join("horizon_lod"), fingerprint)
+        });
         Box::new(SavedLodSampler {
             generator: self,
             inner,
             cache: Default::default(),
             details: Vec::new(),
             approximate: false,
+            disk,
         })
     }
     fn load(&self, x: i32, z: i32) -> Option<Chunk> {

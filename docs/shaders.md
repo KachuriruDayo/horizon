@@ -103,6 +103,35 @@ Post passes also read `scene_color`, `scene_depth`, `previous` (the last pass's 
 Rules the check enforces: your files declare no bindings (`@group`/`@binding`), no entry points and no names starting
 with `horizon_`. Code shared by several stages goes in files listed in `shared`, put before every stage.
 
+## Sun shadows
+
+A pack with a `[material]` can ask for the sun's shadow map (API 0.2, `api = "0.2"`):
+
+```toml
+[shadow]
+resolution = 2048   # the map's side in pixels, 256 to 4096
+distance = 96.0     # half the side of the area around the camera it covers, in blocks, 16 to 256
+```
+
+Before it draws the world, Horizon draws the terrain's depth as the sun sees it (at night, as the moon sees it,
+unless it is new: `frame.shadow_direction` is the light the map was drawn for, `frame.moon_phase` how much of the moon is
+lit) into a square map around the
+camera (the same sections, culled for the sun, that a `shaders/` pack's shadow pass draws; cut-out leaves and plants
+cast the shape of their texture). The material stage reads it with
+
+```wgsl
+fn shadow_visibility(position: vec3<f32>, normal: vec3<f32>) -> f32   // 1 in the sun, 0 in shadow
+```
+
+where `position` is `input.position` and `normal` the face's normal (it moves the lookup off the surface, so a face does
+not shadow itself). It is soft at the edges, 1 outside the map, and 1 where the pack has no `[shadow]` or the sun is
+down. Because the map is drawn from the world, not the screen, a mountain behind you shades the valley in front of you.
+Only terrain casts a shadow: not entities, the hand, translucent blocks or the distant tiles beyond the render
+distance. The post and sky stages do not read the map.
+
+The map follows the camera in whole texels, so shadows do not swim as you move. It costs one extra pass over the
+terrain around you: lower `resolution` or `distance` first if a pack is too slow.
+
 ## Options
 
 Each `[[options]]` entry is a WGSL `override` of the same name, set when the game builds the pipeline: no text

@@ -29,7 +29,8 @@ fn vanilla(kind: StageKind) -> &'static str {
         StageKind::Sky => "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n",
         StageKind::Material => {
             "fn material(input: MaterialInput) -> Surface {\n    \
-             return Surface(input.albedo * input.tint * vec4<f32>(input.lightmap, 1.0));\n}\n"
+             return Surface(input.albedo * input.tint * vec4<f32>(input.lightmap, 1.0));\n}\n\
+             fn wind(input: WindInput) -> vec3<f32> { return vec3<f32>(0.0); }\n"
         }
         StageKind::Post => "fn post(input: PostInput) -> vec4<f32> { return input.color; }\n",
     }

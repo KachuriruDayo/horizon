@@ -66,6 +66,8 @@ pub(super) struct GuestPlay {
     digging: Option<([i32; 3], [i32; 3])>,
     /// The server tick the digging started (ServerPlayerGameMode.destroyProgressStart).
     dig_start: u64,
+    /// The progress a block was left at when the dig began (`native_dig_resume`).
+    dig_resume: f32,
     /// A block the client stopped digging before the server's time was up: it breaks once
     /// its progress since `dig_start` is complete (ServerPlayerGameMode.hasDelayedDestroy).
     delayed: Option<([i32; 3], u64)>,
@@ -1136,22 +1138,28 @@ impl Game<'_> {
                     let destroyed = self.as_guest(host, conn, |g| {
                         if g.creative {
                             let _ = g.break_block(pos);
-                            return true;
+                            return (true, 0.0);
                         }
+                        // A block dug part of the way carries what was already done on it.
+                        let resume = g.dig_resume(pos);
                         if g.may_build() {
                             let _ = g.attack_block(pos);
                             g.mining = Some(Mining {
                                 pos,
-                                progress: 0.0,
+                                progress: resume,
                                 ticks: 0,
                             });
                         }
-                        false
+                        (false, resume)
                     });
-                    if destroyed == Some(true)
+                    if let Some((destroyed, resume)) = destroyed
                         && let Some(play) = host.play.get_mut(&conn)
                     {
-                        play.digging = None;
+                        if destroyed {
+                            play.digging = None;
+                        } else {
+                            play.dig_resume = resume;
+                        }
                     }
                 }
                 1 => {}
@@ -1170,6 +1178,16 @@ impl Game<'_> {
                 }
                 2 => {
                     host.hub.ack(conn, a.sequence);
+                    // A block dug part of the way may keep the step it reached.
+                    let ticks = host.hub.ticks;
+                    let play = host.play.entry(conn).or_default();
+                    let (start, resume) = (play.dig_start, play.dig_resume);
+                    if play.digging.is_some_and(|(p, _)| p == a.pos) {
+                        self.as_guest(host, conn, |g| {
+                            let done = g.destroy_progress(a.pos) * (ticks - start + 1) as f32;
+                            g.native_dig_stop(a.pos, done + resume);
+                        });
+                    }
                     let play = host.play.entry(conn).or_default();
                     play.digging = None;
                     play.mining = None;
@@ -3020,7 +3038,7 @@ impl Game<'_> {
         let play = host.play.entry(conn).or_default();
         let dug = play.digging.take().is_some_and(|(p, _)| p == pos);
         play.mining = None;
-        let start = play.dig_start;
+        let (start, resume) = (play.dig_start, play.dig_resume);
         let state = self.world.block(pos[0], pos[1], pos[2]);
         if !dug {
             return;
@@ -3030,9 +3048,10 @@ impl Game<'_> {
             self.guest_crack_gone(host, conn, pos);
             return;
         }
+        // A block dug part of the way resumes from its step: that counts too.
         let progress = self
             .as_guest(host, conn, |g| g.destroy_progress(pos))
-            .map_or(0.0, |p| p * (ticks - start + 1) as f32);
+            .map_or(0.0, |p| p * (ticks - start + 1) as f32 + resume);
         if progress >= 0.7 {
             self.guest_destroy(host, conn, pos);
         } else {
@@ -3046,6 +3065,7 @@ impl Game<'_> {
     /// ServerPlayerGameMode.tick's delayed destroy: the block breaks once its progress since
     /// the digging started is complete, unless something else removed it first.
     fn guest_delayed_destroy(&mut self, host: &mut LanHost, conn: u32) {
+        let resume = host.play.get(&conn).map_or(0.0, |p| p.dig_resume);
         let Some((pos, start)) = host.play.get(&conn).and_then(|p| p.delayed) else {
             return;
         };
@@ -3055,7 +3075,7 @@ impl Game<'_> {
             None
         } else {
             self.as_guest(host, conn, |g| g.destroy_progress(pos))
-                .map(|p| p * (ticks - start + 1) as f32)
+                .map(|p| p * (ticks - start + 1) as f32 + resume)
         };
         match progress {
             Some(p) if p < 1.0 => {}

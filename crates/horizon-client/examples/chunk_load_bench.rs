@@ -138,6 +138,8 @@ fn main() -> Result<(), Error> {
             blend_radius: 2,
             smooth_lighting: true,
             cutout_leaves: true,
+            leaf_fluff: (0, 10),
+            chop: None,
             assets: &context.assets,
             render: &context.render,
             tables: &context.tables,

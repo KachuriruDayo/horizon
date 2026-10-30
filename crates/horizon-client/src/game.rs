@@ -1576,6 +1576,8 @@ struct Game<'a> {
     inv_clicks: horizon_client::container_screen::Clicks,
     /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
     tweaks: tweaks::Tweaks,
+    /// What the native API keeps for the engine (`native_hooks`).
+    native_engine: native_hooks::NativeEngine,
     /// The wheel and hovered slot of `BundleMouseActions`.
     bundle_mouse: bundles::BundleMouse,
     /// The last inventory click, for the double click that gathers a stack.
@@ -4281,6 +4283,10 @@ impl Game<'_> {
     /// and loses its `damage_per_block` on a block that doesn't break
     /// instantly (`ShearsItem`: on any block but fire).
     fn mine_block_with_held(&mut self, name: &str, hardness: f32) {
+        // A mod that breaks blocks in bulk wears the tool once itself (`native_pause_tool_wear`).
+        if self.native_wear_paused() {
+            return;
+        }
         let Some(stack) = self.inventory[self.selected].clone() else {
             return;
         };
@@ -4326,6 +4332,8 @@ impl Game<'_> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let broken = state;
         let facts = self.res.facts().get(state).clone();
+        // A mod may look at the block while it still stands.
+        self.native_block_breaking(pos);
         let state = self.crack_mined_pot(pos, state);
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
         if self.guarded_by_piglins(&facts.name) {
@@ -4458,6 +4466,9 @@ impl Game<'_> {
                     prevents_melting,
                 );
             });
+        }
+        if removed {
+            self.native_block_broken(pos);
         }
         self.pending.clear(pos);
         self.process_level_events()?;
@@ -5213,7 +5224,7 @@ impl Game<'_> {
             self.attack_block(hit.pos)?;
             self.mining = Some(Mining {
                 pos: hit.pos,
-                progress: 0.0,
+                progress: self.dig_resume(hit.pos),
                 ticks: 0,
             });
         }
@@ -5253,12 +5264,15 @@ impl Game<'_> {
         let progress = if facts.hardness == 0.0 {
             1.0
         } else {
-            speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
+            speed / facts.hardness / if harvest { 30.0 } else { 100.0 } * self.dig_scale(hit.pos)
         };
         self.swing_arm();
         let m = self.mining.as_mut().ok_or("mining")?;
         m.progress += progress;
         m.ticks += 1;
+        let (dig_pos, dig_progress) = (m.pos, m.progress);
+        self.native_dig_stop(dig_pos, dig_progress);
+        let m = self.mining.as_mut().ok_or("mining")?;
         // An instant break at START sends no destroy events.
         if m.progress < 1.0 || m.ticks > 1 {
             let (pos, ticks) = (m.pos, m.ticks);
@@ -5578,6 +5592,7 @@ impl Game<'_> {
             [player.velocity.x, player.velocity.y, player.velocity.z],
             [player.position.x, player.position.y, player.position.z],
         );
+        let mut jumped = false;
         if !riding {
             MotionWorld {
                 entities: &entity_collisions,
@@ -5591,12 +5606,14 @@ impl Game<'_> {
             // Player.jumpFromGround: the jump statistic.
             if grounded && keys.jump && !player.flying && player.velocity.y > 0.2 {
                 self.stats.custom("jump", 1);
+                jumped = true;
             }
         }
         let events = std::mem::take(&mut player.events);
         let spin_hit = player.spin_hit.take();
         let glider_wear = std::mem::take(&mut player.glider_wear);
         let feet = [player.position.x, player.position.y, player.position.z];
+        let sprinting = player.sprinting;
         let player_velocity = [player.velocity.x, player.velocity.y, player.velocity.z];
         self.previous_eye = self.eye;
         let eye_height = if self.sleeping.is_some() {
@@ -5635,9 +5652,18 @@ impl Game<'_> {
         self.end_spin_attack(spin_hit);
         self.record_combat(&events);
         self.wear_armor(&events);
+        if jumped {
+            self.native_jump(feet);
+        }
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, feet),
+                MotionEvent::Emission {
+                    position,
+                    muffled: false,
+                    ..
+                } if self.native_stepped([position.x, position.y, position.z], feet, sprinting) => {
+                }
                 MotionEvent::Emission { state, muffled, .. } => {
                     let sounds = self.res.facts().get(state).sounds.clone();
                     // Entity.playStepSound: the block's step sound at 0.15 volume,
@@ -5710,7 +5736,12 @@ impl Game<'_> {
                     count,
                     speed,
                 }) => self.landing_dust(None, state, position, count, speed),
-                MotionEvent::Fall(event) => self.landing_block_updates(&event),
+                MotionEvent::Fall(event) => {
+                    if matches!(event, horizon_client::landing::FallEvent::HitGround { .. }) {
+                        self.native_land(feet);
+                    }
+                    self.landing_block_updates(&event)
+                }
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
                 MotionEvent::HoneySlide {
@@ -5757,6 +5788,7 @@ impl Game<'_> {
                         "minecraft:entity.player.splash"
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
+                    self.native_splash(feet);
                 }
                 MotionEvent::SplashParticle {
                     bubble,
@@ -8783,6 +8815,9 @@ impl Game<'_> {
         // Breaking progress overlays (destroy_stage_0..9): ours and the other players'.
         self.mark_stage(out.len(), "DESTROY");
         for &(pos, stage) in &cracks {
+            if self.native_thin_at(pos) {
+                continue;
+            }
             let o = (glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
                 - camera)
                 .as_vec3();
@@ -11311,11 +11346,18 @@ impl Game<'_> {
         // Options.biomeBlendRadius, ambientOcclusion and cutoutLeaves:
         // LevelExtractor.allChanged when they change.
         let (s, st) = (&self.settings, &self.streaming);
-        let remesh = (s.biome_blend, s.smooth_lighting, s.cutout_leaves)
-            != (st.biome_blend, st.smooth_lighting, st.cutout_leaves);
+        let fluff = (s.extras.leaf_fluff, s.extras.leaf_spread);
+        let remesh = (s.biome_blend, s.smooth_lighting, s.cutout_leaves, fluff)
+            != (
+                st.biome_blend,
+                st.smooth_lighting,
+                st.cutout_leaves,
+                st.leaf_fluff,
+            );
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
         self.streaming.cutout_leaves = self.settings.cutout_leaves;
+        self.streaming.leaf_fluff = fluff;
         if remesh {
             self.all_sections_changed();
         }
@@ -12358,6 +12400,8 @@ impl Game<'_> {
         );
         // visual/water_fog_color: no dimension sets it, its default is #050533.
         let water_fog = blend(|b| Some(b.water_fog), [0.0; 3]);
+        // The biome's own water colour, for the underwater haze.
+        let water_tint = blend(|b| Some(b.water), [0.25, 0.46, 0.89]);
         let mut sky = environment.sample(self.world.day_time, Some(biome_sky), Some(biome_fog));
         let (rain, thunder) = if self.dim == Dim::Overworld {
             self.world.weather.levels(alpha as f32)
@@ -12606,7 +12650,7 @@ impl Game<'_> {
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
             cave_culling,
             water_fog,
-            fog: Some(self.frame_fog(camera, &sky, biome, water_fog)),
+            fog: Some(self.frame_fog(camera, &sky, biome, water_fog, water_tint)),
             dark_disc: self.dark_disc(camera),
             outline,
             outline_after_terrain,
@@ -14505,6 +14549,7 @@ impl<'a> Game<'a> {
             craft_table: None,
             inv_drag: None,
             tweaks: Default::default(),
+            native_engine: Default::default(),
             bundle_mouse: Default::default(),
             inv_clicks: Default::default(),
             last_inv_click: None,

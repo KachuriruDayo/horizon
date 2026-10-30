@@ -78,3 +78,49 @@ fn block_states_take_their_new_field_names() {
     assert!(state.get("properties").is_some());
     assert_eq!(chunk.get("DataVersion"), Some(&Tag::Int(CURRENT)));
 }
+
+#[test]
+fn a_structure_template_of_1_20_is_upgraded_like_a_chunk() {
+    let mut tag = snbt(
+        "{DataVersion: 3465, size: [1, 1, 2], \
+         palette: [{Name: \"minecraft:grass\"}, {Name: \"minecraft:chest\", Properties: {facing: \"north\"}}], \
+         blocks: [{pos: [0, 0, 0], state: 0}, \
+                  {pos: [0, 0, 1], state: 1, nbt: {id: \"minecraft:chest\", \
+                     Items: [{Slot: 0b, id: \"minecraft:grass\", Count: 2b}]}}], \
+         entities: [{pos: [0.5d, 0.0d, 0.5d], blockPos: [0, 0, 0], \
+                     nbt: {id: \"minecraft:item_frame\", Item: {id: \"minecraft:grass\", Count: 1b}}}]}",
+    );
+    update_structure(&mut tag);
+    assert_eq!(tag.get("DataVersion"), Some(&Tag::Int(CURRENT)));
+    let palette = dynamic::stream(tag.get("palette"));
+    // 1.20.3 renamed the grass plant to short grass: block names and item ids alike. Block
+    // states take `id` and `properties` (as in chunks).
+    assert_eq!(
+        dynamic::as_str(palette[0].get("id")).as_deref(),
+        Some("minecraft:short_grass")
+    );
+    assert!(palette[1].get("properties").is_some());
+    let blocks = dynamic::stream(tag.get("blocks"));
+    let items = dynamic::stream(blocks[1].get("nbt").and_then(|n| n.get("Items")));
+    assert_eq!(
+        dynamic::as_str(items[0].get("id")).as_deref(),
+        Some("minecraft:short_grass")
+    );
+    // 1.20.5's item stacks: `count`, not `Count`.
+    assert_eq!(items[0].get("count"), Some(&Tag::Int(2)));
+    let entities = dynamic::stream(tag.get("entities"));
+    let frame = entities[0].get("nbt").expect("the entity's data");
+    let held = frame.get("item").or_else(|| frame.get("Item")).expect("the held item");
+    assert_eq!(
+        dynamic::as_str(held.get("id")).as_deref(),
+        Some("minecraft:short_grass")
+    );
+}
+
+#[test]
+fn a_current_structure_template_is_left_alone() {
+    let mut tag = snbt("{DataVersion: 5023, size: [1, 1, 1], palette: [{Name: \"minecraft:grass\"}], blocks: []}");
+    let before = tag.clone();
+    update_structure(&mut tag);
+    assert_eq!(tag, before);
+}

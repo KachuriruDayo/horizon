@@ -27,9 +27,13 @@ fn reads_every_key_of_schema_1() {
             m.version.as_str(),
             m.api.as_str()
         ),
-        ("sample_pack", "Sample Pack", "1.0.0", "0.1")
+        ("sample_pack", "Sample Pack", "1.0.0", "0.2")
     );
     assert_eq!(m.authors, ["Horizon"]);
+    assert_eq!(
+        m.shadow.as_ref().map(|s| (s.resolution, s.distance)),
+        Some((2048, 96.0))
+    );
     assert_eq!(m.license.as_deref(), Some("MIT"));
     assert_eq!(m.sky.as_ref().unwrap().file, "sky.wgsl");
     assert_eq!(
@@ -105,8 +109,8 @@ fn refuses_what_this_build_does_not_read() {
     let cases = [
         (text.replace("schema = 1", "schema = 2"), "schema 2"),
         (
-            text.replace("api = \"0.1\"", "api = \"0.2\""),
-            "shader API 0.2",
+            text.replace("api = \"0.2\"", "api = \"0.3\""),
+            "shader API 0.3",
         ),
         (
             text.replace("\"sample_pack\"", "\"Sample\""),
@@ -119,6 +123,14 @@ fn refuses_what_this_build_does_not_read() {
         (
             text.replace("gpu_ms = 1.5", "gpu_ms = 40.0"),
             "budget.gpu_ms",
+        ),
+        (
+            text.replace("resolution = 2048", "resolution = 64"),
+            "shadow.resolution",
+        ),
+        (
+            text.replace("distance = 96.0", "distance = 1000.0"),
+            "shadow.distance",
         ),
         (
             text.replace("\"common.wgsl\"", "\"../common.wgsl\""),
@@ -235,4 +247,47 @@ fn refuses_files_a_pack_does_not_use() {
             .unwrap_err()
             .contains("missing at the pack's root")
     );
+}
+
+#[test]
+fn a_players_choices_are_saved_read_and_cycled() {
+    use horizon_shader_api::{OptionKind, chosen, with_chosen};
+    let saved = with_chosen("", "fresh", "quality", Some("High"));
+    let saved = with_chosen(&saved, "fresh", "bloom", Some("0.3"));
+    assert_eq!(saved, "fresh.quality=High;fresh.bloom=0.3");
+    assert_eq!(chosen(&saved, "fresh", "quality"), Some("High"));
+    assert_eq!(chosen(&saved, "other", "quality"), None);
+    // Setting again replaces; None drops.
+    let saved = with_chosen(&saved, "fresh", "quality", Some("Low"));
+    assert_eq!(chosen(&saved, "fresh", "quality"), Some("Low"));
+    assert_eq!(
+        with_chosen(&saved, "fresh", "quality", None),
+        "fresh.bloom=0.3"
+    );
+
+    let quality = OptionKind::Choice {
+        values: vec!["Low".into(), "Medium".into(), "High".into()],
+        default: 1,
+    };
+    assert_eq!(quality.default_text(), "Medium");
+    assert_eq!(quality.constant_of("High"), Some(2.0));
+    assert_eq!(quality.constant_of("Ultra"), None);
+    assert_eq!(quality.cycle_text(None, false), "High");
+    assert_eq!(quality.cycle_text(Some("High"), false), "Low");
+    assert_eq!(quality.cycle_text(Some("Low"), true), "High");
+
+    let on = OptionKind::Bool { default: true };
+    assert_eq!(on.cycle_text(None, false), "false");
+    assert_eq!(on.constant_of("false"), Some(0.0));
+
+    let amount = OptionKind::Float {
+        default: 0.5,
+        min: 0.0,
+        max: 1.0,
+        step: 0.05,
+    };
+    assert_eq!(amount.cycle_text(None, false), "0.6");
+    assert_eq!(amount.cycle_text(Some("1"), false), "0");
+    assert_eq!(amount.cycle_text(Some("0"), true), "1");
+    assert_eq!(amount.constant_of("7"), Some(1.0));
 }

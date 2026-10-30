@@ -143,6 +143,70 @@ mod vertex_tests {
         assert_eq!(hdr_tier("ochre_froglight", 15), INCANDESCENT);
         assert_eq!(hdr_tier("sculk_sensor", 1), LOW);
     }
+    #[test]
+    fn sway_uses_the_high_half_of_the_alpha_byte_and_leaves_the_emission() {
+        let rgb = super::emitting(super::pack_rgb([0x12, 0x34, 0x56]), super::VERY_BRIGHT);
+        assert_eq!(super::with_sway(rgb, 0.0), rgb);
+        assert_eq!(super::with_sway(rgb, 1.0), 0x0B56_3412);
+        assert_eq!(
+            super::with_sway(rgb, 0.5) & !super::SWAY_BITS,
+            rgb & !super::SWAY_BITS
+        );
+        assert_eq!(super::with_sway(super::with_sway(rgb, 1.0), 0.0), rgb);
+    }
+    #[test]
+    fn a_stack_of_plants_sways_without_a_gap_between_its_blocks() {
+        // The top of each block is the bottom of the one above it.
+        for below in 0..6 {
+            let top = super::sway_weight(below, true, 1.0);
+            let next_bottom = super::sway_weight(below + 1, true, 0.0);
+            assert!(
+                (top - next_bottom).abs() < 1e-6,
+                "{below}: {top} {next_bottom}"
+            );
+        }
+        assert_eq!(super::sway_weight(0, true, 0.0), 0.0);
+        assert_eq!(super::sway_weight(3, true, 0.5), 1.0);
+        // Alone, from the base to the tip.
+        assert_eq!(super::sway_weight(0, false, 1.0), 1.0);
+    }
+    #[test]
+    fn leaf_fluff_is_fixed_per_block_and_turning_keeps_a_planes_size() {
+        let p = [12, 70, -5];
+        assert_eq!(super::hash01(p, 3), super::hash01(p, 3));
+        assert_ne!(super::hash01(p, 3), super::hash01(p, 4));
+        assert_ne!(super::hash01(p, 3), super::hash01([13, 70, -5], 3));
+        assert!((0..500).all(|i| (0.0..1.0).contains(&super::hash01([i, 3, -i], 1))));
+        let v = [0.5, -0.5, 0.0];
+        let r = super::rotate(v, [1.1, 0.4, 2.3]);
+        let len = |a: [f32; 3]| (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+        assert!((len(v) - len(r)).abs() < 1e-5);
+    }
+    #[test]
+    fn only_vertical_sheets_turned_across_a_block_are_crossed_plants() {
+        // Grass: a quad from (0.1, 0, 0.1) to (0.9, 1, 0.9).
+        let cross = [
+            [0.1, 0.0, 0.1],
+            [0.1, 1.0, 0.1],
+            [0.9, 1.0, 0.9],
+            [0.9, 0.0, 0.9],
+        ];
+        assert!(super::crossed(&cross));
+        // A wall of a cube, and its top, are not.
+        let wall = [
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+        let top = [
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [1.0, 1.0, 0.0],
+        ];
+        assert!(!super::crossed(&wall) && !super::crossed(&top));
+    }
 }
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
@@ -705,6 +769,43 @@ pub fn hdr_tier(name: &str, level: u8) -> u8 {
         _ => LOW,
     }
 }
+/// The bits of `TerrainVertex::color`'s alpha byte that say how much a plant's vertex sways in
+/// the wind (`WindInput::weight`): 15 minus the weight in sixteenths, so the usual 0xF means
+/// not at all.
+pub const SWAY_BITS: u32 = 0xF000_0000;
+/// `color` marked as swaying with `weight` (0 to 1).
+pub fn with_sway(color: u32, weight: f32) -> u32 {
+    let level = (weight.clamp(0.0, 1.0) * 15.0).round() as u32;
+    color & !SWAY_BITS | (15 - level) << 28
+}
+/// How much a vertex at height `y` (0 to 1) in its block sways. A plant alone sways from its base
+/// to its tip. In a stack (sugar cane, tall grass: `below` plants under this block, `stacked`
+/// when any is above or below) the weight rises over the first two blocks of the stack and then
+/// holds, so the top of one block and the bottom of the next move together and the stack does
+/// not tear.
+pub fn sway_weight(below: i32, stacked: bool, y: f32) -> f32 {
+    if stacked {
+        ((below.min(2) as f32 + y) / 2.0).min(1.0)
+    } else {
+        y
+    }
+}
+/// Whether the quad's corners make a vertical sheet turned about 45 degrees: the crossed
+/// quads of grass, flowers, ferns and saplings, which sway from their base.
+pub fn crossed(positions: &[[f32; 3]; 4]) -> bool {
+    let a = [0, 1, 2].map(|i| positions[1][i] - positions[0][i]);
+    let b = [0, 1, 2].map(|i| positions[3][i] - positions[0][i]);
+    let n = [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ];
+    let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    length > 1.0e-6
+        && n[1].abs() < 0.2 * length
+        && n[0].abs() > 0.4 * length
+        && n[2].abs() > 0.4 * length
+}
 const UNSET: u32 = u32::MAX;
 const NO_BIOME: u16 = u16::MAX;
 /// The `ColorResolver`s `ClientLevel` caches block tints for.
@@ -836,6 +937,11 @@ pub struct Mesher<'a> {
     pub smooth_lighting: bool,
     /// The `cutoutLeaves` option (fancy graphics); off makes leaves opaque.
     pub cutout_leaves: bool,
+    /// Horizon's leaf fluff (`extras.rs`): the level, 0 off to 2, and how far a plane may stray
+    /// from its block in tenths of a block.
+    pub leaf_fluff: (u8, u8),
+    /// The logs being chopped; empty for none.
+    pub chop: Option<ChopViews>,
 }
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
@@ -846,9 +952,31 @@ impl Mesher<'_> {
         if section.is_uniform(0) {
             return out;
         }
-        let pad = Padded::new(region, sy);
-        out.visibility = visibility(&pad, &self.tables.info);
+        let mut pad = Padded::new(region, sy);
         let base_y = center.min_y() + sy * 16;
+        // A log being chopped is open to its neighbours (they show their sides to it), and is
+        // drawn on its own after the section.
+        let mut thin: Vec<([i32; 3], ChopView)> = Vec::new();
+        for (p, view) in self.chop.iter().flat_map(|views| views.iter()) {
+            let l = [p[0] - center.x * 16, p[1] - base_y, p[2] - center.z * 16];
+            if l.iter().all(|c| (-B..16 + B).contains(c)) {
+                pad.blocks[pi(l[0], l[1], l[2])] = view.hollow;
+                // The log's own cell holds no light (it was solid): it takes the brightest of
+                // its neighbours, so the thin log and the sides that face it are not black.
+                if l.iter().all(|c| (-B + 1..16 + B - 1).contains(c)) {
+                    let lit = Direction::ALL.iter().fold(0u8, |lit, d| {
+                        let [dx, dy, dz] = d.normal();
+                        let n = pad.light[pi(l[0] + dx, l[1] + dy, l[2] + dz)];
+                        (lit & 15).max(n & 15) | (lit >> 4).max(n >> 4) << 4
+                    });
+                    pad.light[pi(l[0], l[1], l[2])] = lit;
+                }
+                if l.iter().all(|c| (0..16).contains(c)) {
+                    thin.push((l, *view));
+                }
+            }
+        }
+        out.visibility = visibility(&pad, &self.tables.info);
         let mut tints = Tints::new(
             region,
             self.biomes,
@@ -863,7 +991,7 @@ impl Mesher<'_> {
             for z in 0..16 {
                 for x in 0..16 {
                     let id = pad.blocks[pi(x, y, z)];
-                    if id == 0 {
+                    if id == 0 || thin.iter().any(|(l, _)| *l == [x, y, z]) {
                         continue;
                     }
                     let state = &info[id as usize];
@@ -943,6 +1071,61 @@ impl Mesher<'_> {
                             );
                         }
                     }
+                    // Leaf fluff: a leaf block you can see gets planes of its own texture
+                    // through it, so the crown is full instead of a stack of cubes.
+                    if state.leaves
+                        && self.cutout_leaves
+                        && self.leaf_fluff.0 > 0
+                        && let Some(face) = models
+                            .iter()
+                            .flat_map(|m| &m.faces)
+                            .find(|f| f.quad.cull.is_some_and(|d| visible[d as usize]))
+                    {
+                        let world = [center.x * 16 + x, base_y + y, center.z * 16 + z];
+                        self.fluff(
+                            &pad,
+                            &mut tints,
+                            &mut out,
+                            [x, y, z],
+                            origin,
+                            world,
+                            face,
+                            state,
+                        );
+                    }
+                }
+            }
+        }
+        for (l, view) in thin {
+            let state = &info[view.log as usize];
+            let world = BlockPos::new(center.x * 16 + l[0], base_y + l[1], center.z * 16 + l[2]);
+            if catalog
+                .models_at(BlockStateId(view.log), world, &mut models)
+                .is_err()
+            {
+                continue;
+            }
+            let origin = [l[0] as f32, l[1] as f32, l[2] as f32];
+            for model in &models {
+                for face in &model.faces {
+                    let mut quad = face.quad.clone();
+                    quad.cull = None;
+                    for p in &mut quad.positions {
+                        for (axis, c) in p.iter_mut().enumerate() {
+                            if axis != usize::from(view.axis) {
+                                *c = 0.5 + (*c - 0.5) * view.width;
+                            }
+                        }
+                    }
+                    let thinned = BakedFace {
+                        quad,
+                        layer: face.layer,
+                        opaque: face.opaque,
+                        translucent: face.translucent,
+                    };
+                    self.face(
+                        &pad, &mut tints, &mut out, l, origin, &thinned, false, state,
+                    );
                 }
             }
         }
@@ -965,6 +1148,127 @@ impl Mesher<'_> {
             Tint::Redstone(p) => redstone_color(p),
             Tint::Stem(age) => stem_color(age),
         })
+    }
+    /// The plants stacked under the block at `pos` (up to two counted, what the padded
+    /// neighbourhood holds) and whether it has any above or below: the same family of
+    /// plant (grass tint), standing on one another, such as sugar cane or tall grass.
+    fn plant_stack(&self, pad: &Padded, [x, y, z]: [i32; 3], state: &Info) -> (i32, bool) {
+        let info = &self.tables.info;
+        let family = |i: &Info| -> Option<u8> {
+            if i.solid || i.full || !i.model || i.tint_count == 0 {
+                return None;
+            }
+            match i.tints[0] {
+                Tint::Grass | Tint::TallGrassUpper => Some(1),
+                Tint::Foliage => Some(2),
+                Tint::DryFoliage => Some(3),
+                _ => None,
+            }
+        };
+        let Some(mine) = family(state) else {
+            return (0, false);
+        };
+        let same = |dy: i32| {
+            let id = pad.blocks[pi(x, y + dy, z)];
+            id != 0 && family(&info[id as usize]) == Some(mine)
+        };
+        let below = (1..=B).take_while(|&d| same(-d)).count() as i32;
+        (below, below > 0 || same(1))
+    }
+    /// The leaf fluff of one leaf block (`leaf_fluff`): one or two planes of the block's own
+    /// texture, turned at random, through its middle, each drawn from both sides. Where the
+    /// planes lie is fixed by the block's position, so a crown looks the same every time.
+    #[allow(clippy::too_many_arguments)]
+    fn fluff(
+        &self,
+        pad: &Padded,
+        tints: &mut Tints,
+        out: &mut SectionMesh,
+        pos: [i32; 3],
+        origin: [f32; 3],
+        world: [i32; 3],
+        face: &BakedFace,
+        state: &Info,
+    ) {
+        let q = &face.quad;
+        // `face` is a side of the block that shows: its light and shade are the fluff's.
+        let exposed = q.cull.expect("a culled side of the block");
+        let (level, spread) = (self.leaf_fluff.0, f32::from(self.leaf_fluff.1) / 10.0);
+        // The light and shade of the side that shows, as the block's own face gets.
+        let coords = lighting::coords(pad, state, lighting::step(pos, exposed));
+        let shade = lighting::gray(lighting::cardinal(
+            self.nether_shading,
+            horizon_assets::model::Direction::Up,
+        )) as u32;
+        let tint = Self::tint(state, q.tint_index, tints, pos);
+        let rgb = match tint {
+            Some(t) => [16, 8, 0].map(|shift| shade * (t >> shift & 255) / 255),
+            None => [shade; 3],
+        };
+        let color = emitting(pack_rgb(rgb), state.emission.max(q.light_emission));
+        let light = pack_coords(lighting::with_emission(coords, q.light_emission));
+        let layer = if face.opaque && !face.translucent {
+            face.layer as u16 | OPAQUE_LAYER
+        } else {
+            face.layer as u16
+        };
+        // The face's square, moved to the block's middle: its corners are 0.5 from the centre.
+        let edge = |a: usize, b: usize| {
+            [
+                q.positions[b][0] - q.positions[a][0],
+                q.positions[b][1] - q.positions[a][1],
+                q.positions[b][2] - q.positions[a][2],
+            ]
+        };
+        let (e1, e2) = (edge(0, 1), edge(0, 3));
+        let cross = [
+            e1[1] * e2[2] - e1[2] * e2[1],
+            e1[2] * e2[0] - e1[0] * e2[2],
+            e1[0] * e2[1] - e1[1] * e2[0],
+        ];
+        let length = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2])
+            .sqrt()
+            .max(1.0e-6);
+        let normal = cross.map(|c| c / length);
+        let corner: [[f32; 3]; 4] = std::array::from_fn(|i| {
+            let p = q.positions[i];
+            let v = [p[0] - 0.5, p[1] - 0.5, p[2] - 0.5];
+            let along = v[0] * normal[0] + v[1] * normal[1] + v[2] * normal[2];
+            [
+                v[0] - normal[0] * along,
+                v[1] - normal[1] * along,
+                v[2] - normal[2] * along,
+            ]
+        });
+        for plane in 0..u32::from(level.min(2)) {
+            let roll = |k: u32| hash01(world, plane * 8 + k);
+            let angles = [
+                roll(0) * std::f32::consts::PI,
+                roll(1) * std::f32::consts::PI,
+                roll(2) * std::f32::consts::PI,
+            ];
+            let size = 1.0 + 0.25 * roll(3);
+            let shift = [
+                (roll(4) - 0.5) * spread,
+                (roll(5) - 0.5) * spread,
+                (roll(6) - 0.5) * spread,
+            ];
+            let moved: [[f32; 3]; 4] = std::array::from_fn(|i| {
+                let r = rotate(corner[i], angles);
+                [
+                    origin[0] + 0.5 + r[0] * size + shift[0],
+                    origin[1] + 0.5 + r[1] * size + shift[1],
+                    origin[2] + 0.5 + r[2] * size + shift[2],
+                ]
+            });
+            // Both sides: the second quad winds the other way round.
+            for order in [[0, 1, 2, 3], [0, 3, 2, 1]] {
+                for i in order {
+                    out.solid
+                        .push(TerrainVertex::new(moved[i], q.uv[i], layer, color, light));
+                }
+            }
+        }
     }
     #[allow(clippy::too_many_arguments)]
     fn face(
@@ -997,6 +1301,14 @@ impl Mesher<'_> {
             ([lighting::gray(directional); 4], [coords; 4])
         };
         let tint = Self::tint(state, q.tint_index, tints, pos);
+        // Crossed plants sway from their base: the vertex's height in its block is its weight
+        // (the upper half of tall grass starts halfway).
+        let sways = crossed(&q.positions);
+        let (below, stacked) = if sways {
+            self.plant_stack(pad, pos, state)
+        } else {
+            (0, false)
+        };
         let target = if face.translucent {
             &mut out.translucent
         } else {
@@ -1009,6 +1321,10 @@ impl Mesher<'_> {
                 None => [g; 3],
             };
             let p = q.positions[i];
+            let mut color = emitting(pack_rgb(rgb), tier);
+            if sways {
+                color = with_sway(color, sway_weight(below, stacked, p[1]));
+            }
             target.push(TerrainVertex::new(
                 [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],
                 q.uv[i],
@@ -1019,12 +1335,44 @@ impl Mesher<'_> {
                 } else {
                     face.layer as u16
                 },
-                emitting(pack_rgb(rgb), tier),
+                color,
                 pack_coords(lighting::with_emission(coords[i], q.light_emission)),
             ));
         }
     }
 }
+/// A number in 0..1 from a block position and a salt: the same every time.
+fn hash01(p: [i32; 3], salt: u32) -> f32 {
+    let mut z = (p[0] as u64) << 40 ^ (p[1] as u64 & 0xF_FFFF) << 20 ^ (p[2] as u64 & 0xF_FFFF);
+    z = z.wrapping_add(u64::from(salt).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
+}
+/// `v` turned about the x, then y, then z axis by `angles` (radians).
+fn rotate(v: [f32; 3], angles: [f32; 3]) -> [f32; 3] {
+    let (sx, cx) = angles[0].sin_cos();
+    let v = [v[0], v[1] * cx - v[2] * sx, v[1] * sx + v[2] * cx];
+    let (sy, cy) = angles[1].sin_cos();
+    let v = [v[0] * cy + v[2] * sy, v[1], -v[0] * sy + v[2] * cy];
+    let (sz, cz) = angles[2].sin_cos();
+    [v[0] * cz - v[1] * sz, v[0] * sz + v[1] * cz, v[2]]
+}
+/// A log being chopped (Horizon's tree chop), drawn stripped and thinned instead of whole.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChopView {
+    /// The stripped log's state, with the log's own axis.
+    pub log: u32,
+    /// A state that lets the neighbours see this block as open (a fence), standing in for the
+    /// log while the neighbourhood is meshed.
+    pub hollow: u32,
+    /// 0 x, 1 y, 2 z: the way the log runs.
+    pub axis: u8,
+    /// The share of the log's width left, 1 down to a fence post's 4/16.
+    pub width: f32,
+}
+/// The logs being chopped, by position.
+pub type ChopViews = Arc<std::collections::HashMap<[i32; 3], ChopView>>;
 /// Snapshot of the 3x3 chunk neighbourhood used by a worker job.
 pub type Region = [[Option<Arc<Chunk>>; 3]; 3];
 pub fn borrow(region: &Region) -> [[Option<&Chunk>; 3]; 3] {

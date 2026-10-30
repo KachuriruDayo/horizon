@@ -190,6 +190,15 @@ enum Behaviour {
     Base,
     /// BaseAshSmokeParticle / Explode / Dust / Snowflake / EmissiveRising: base tick, sprite from age.
     Animated,
+    /// Horizon's waves: animated, fading in and out over the given ticks to `max` opacity.
+    Fading {
+        max: f32,
+        fade_in: i32,
+        fade_out: i32,
+        /// The size at birth and how much of it is added by the end of life.
+        size0: f32,
+        grow: f32,
+    },
     Lava,
     Drip {
         fluid: Fluid,
@@ -362,6 +371,13 @@ pub struct Particle {
     light: Light,
     behaviour: Behaviour,
     no_render: bool,
+    /// Lies flat, facing up (Horizon's ripples), and the sprite's height over its width, with
+    /// the foot of a taller one at the particle's position, turned to the camera around the
+    /// vertical only (Horizon's splashes).
+    flat: bool,
+    aspect: f32,
+    /// The turn of a flat particle about the vertical.
+    yaw: f32,
     /// Ticked once when created (`CritParticle` constructor).
     pre_tick: bool,
     /// `Particle.random`: the particle's own generator (`RandomSource.create()`).
@@ -701,6 +717,9 @@ impl Particle {
             light: Light::World,
             behaviour: Behaviour::Base,
             no_render: false,
+            flat: false,
+            aspect: 1.0,
+            yaw: 0.0,
             pre_tick: false,
             random: LegacyRandom::new(0),
         }
@@ -1598,6 +1617,101 @@ impl ParticleEngine {
         let mut local = LegacyRandom::new(seed);
         let r = &mut local;
         let mut particle = match ty {
+            T::HorizonCascade | T::HorizonSpray => {
+                // Horizon's waterfall effects: foam puffs and fine spray that drift on the
+                // velocity given, through blocks, fading by the frames of their sprite set.
+                let cascade = ty == T::HorizonCascade;
+                let mut q = Particle::at(r, ty, p);
+                q.velocity = v;
+                q.has_physics = false;
+                q.friction = if cascade { 0.92 } else { 0.96 };
+                q.gravity = if cascade { -0.01 } else { 0.01 };
+                q.size = if cascade {
+                    0.4 + r.next_float() * 0.35
+                } else {
+                    0.08 + r.next_float() * 0.06
+                };
+                q.lifetime = if cascade {
+                    14 + (r.next_float() * 8.0) as i32
+                } else {
+                    18 + (r.next_float() * 12.0) as i32
+                };
+                q.rgba = [1.0, 1.0, 1.0, if cascade { 0.8 } else { 0.6 }];
+                q.behaviour = Behaviour::Animated;
+                q.set = set;
+                q
+            }
+            T::HorizonWake => {
+                // A patch of foam in the wake of a boat or a swimmer: it lies on the water,
+                // spreads and thins out, drifting sideways on the velocity given.
+                let mut q = Particle::at(r, ty, p);
+                q.velocity = v;
+                q.has_physics = false;
+                q.gravity = 0.0;
+                q.friction = 0.92;
+                q.size = o.scale;
+                q.yaw = r.next_float() * std::f32::consts::TAU;
+                q.flat = true;
+                q.lifetime = 32 + (r.next_float() * 12.0) as i32;
+                q.rgba = [1.0, 1.0, 1.0, 0.0];
+                q.behaviour = Behaviour::Fading {
+                    max: 0.7,
+                    fade_in: 3,
+                    fade_out: 26,
+                    size0: o.scale,
+                    grow: 1.1,
+                };
+                q.set = set;
+                q
+            }
+            T::HorizonWave => {
+                // A wave of Horizon's coastal waves: a crest lying on the water that runs
+                // towards the shore on the velocity given, `scale` its half width in blocks and
+                // the first of `color` its heading about the vertical (radians), the second its life in ticks.
+                let mut q = Particle::at(r, ty, p);
+                q.velocity = v;
+                q.has_physics = false;
+                q.gravity = 0.0;
+                q.friction = 1.0;
+                q.size = o.scale;
+                q.yaw = o.color[0];
+                q.flat = true;
+                q.lifetime = (o.color[1] as i32).max(20);
+                q.rgba = [1.0, 1.0, 1.0, 0.0];
+                q.behaviour = Behaviour::Fading {
+                    max: 0.85,
+                    fade_in: 12,
+                    fade_out: 14,
+                    size0: o.scale,
+                    grow: 0.0,
+                };
+                q.set = set;
+                q
+            }
+            T::HorizonRipple | T::HorizonSplashRing | T::HorizonSplash | T::HorizonSplashFoam => {
+                // Horizon's water surface effects: rings lying on the water, columns and
+                // foam standing on it, each running through the frames of its sprite set.
+                let mut q = Particle::at(r, ty, p);
+                q.velocity = [0.0; 3];
+                q.has_physics = false;
+                q.gravity = 0.0;
+                q.friction = 1.0;
+                let jitter = 0.85 + r.next_float() * 0.3;
+                let (size, lifetime) = match ty {
+                    T::HorizonRipple => (0.5, 21),
+                    T::HorizonSplashRing => (0.8, 18),
+                    T::HorizonSplash => (0.28, 14),
+                    _ => (0.26, 14),
+                };
+                q.size = size * jitter * o.scale;
+                q.lifetime = lifetime;
+                q.flat = matches!(ty, T::HorizonRipple | T::HorizonSplashRing);
+                q.aspect = if q.flat { 1.0 } else { 2.0 };
+                q.rgba = [1.0, 1.0, 1.0, 0.85];
+                q.behaviour = Behaviour::Animated;
+                q.set = set;
+                q
+            }
             T::Block | T::BlockCrumble | T::DustPillar => {
                 let (sprite, tint) = o.block.clone()?;
                 let mut q = Particle::terrain(r, p, v, sprite, tint);
@@ -3218,6 +3332,20 @@ impl ParticleEngine {
                 p.base_tick(level);
                 self.sprite_from_age(p);
             }
+            Behaviour::Fading {
+                max,
+                fade_in,
+                fade_out,
+                size0,
+                grow,
+            } => {
+                p.base_tick(level);
+                self.sprite_from_age(p);
+                p.size = size0 * (1.0 + grow * (p.age as f32 / p.lifetime.max(1) as f32));
+                let rise = (p.age as f32 / fade_in.max(1) as f32).min(1.0);
+                let fall = ((p.lifetime - p.age) as f32 / fade_out.max(1) as f32).clamp(0.0, 1.0);
+                p.rgba[3] = max * rise.min(fall);
+            }
             Behaviour::Snowflake => {
                 p.base_tick(level);
                 self.sprite_from_age(p);
@@ -4016,6 +4144,22 @@ impl ParticleEngine {
                 alpha = lifetime_alpha(la, p.age, p.lifetime, partial);
             }
             let mut rotations = [Some(rotation), None];
+            if p.flat {
+                rotations = [
+                    Some(
+                        Quat::from_rotation_y(p.yaw)
+                            * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                    ),
+                    None,
+                ];
+            } else if p.aspect != 1.0 {
+                rotations = [
+                    Some(Quat::from_rotation_y(
+                        std::f32::consts::PI - yaw.to_radians(),
+                    )),
+                    None,
+                ];
+            }
             let mut rgb = [p.rgba[0], p.rgba[1], p.rgba[2]];
             match p.behaviour {
                 // ShriekParticle.extract: two tilted quads, fading out.
@@ -4091,7 +4235,13 @@ impl ParticleEngine {
                     ((-1.0, 1.0), [u0, v0]),
                     ((-1.0, -1.0), [u0, v1]),
                 ] {
-                    let v = center + rotation * FVec3::new(n.0, n.1, 0.0) * size;
+                    // A tall sprite stands on its position: its height runs from 0 up.
+                    let up = if p.aspect == 1.0 {
+                        n.1
+                    } else {
+                        (n.1 + 1.0) * p.aspect
+                    };
+                    let v = center + rotation * FVec3::new(n.0, up, 0.0) * size;
                     out.push(Vertex {
                         normal: [0; 4],
                         pos: v.to_array(),

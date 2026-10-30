@@ -518,6 +518,13 @@ impl ChunkGenerator for VanillaTerrain {
     fn lod_sampler(self: Arc<Self>) -> Box<dyn LodSampler> {
         Box::new(VanillaLodSampler::new(self))
     }
+    fn lod_fingerprint(&self) -> Option<u64> {
+        Some(crate::lod_cache::fingerprint(&[
+            &self.seed.to_le_bytes(),
+            self.preset.as_bytes(),
+            self.dimension.as_bytes(),
+        ]))
+    }
     fn idle(&self, worker: &mut GeneratorWorker) {
         worker.release();
     }
