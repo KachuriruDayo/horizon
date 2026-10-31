@@ -1103,6 +1103,13 @@ pub struct Mob {
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
 pub enum MobEvent {
+    /// `WorkAtPoi`: a villager works at its job site (`Villager.playWorkSound`).
+    Worked {
+        mob: u32,
+        site: [i32; 3],
+        profession: u8,
+        level: i32,
+    },
     /// Squid.handleEntityEvent(19), resetting the remote tentacle cycle.
     SquidCycle {
         mob: u32,

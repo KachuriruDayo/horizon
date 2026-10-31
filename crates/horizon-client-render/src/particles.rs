@@ -26,10 +26,50 @@ use std::{
 pub use horizon_client_core::particle_type::ParticleType;
 pub use horizon_items::firework::{DYE_FIREWORK_COLORS, FireworkExplosion, FireworkShape};
 
+/// What a native mod says about one of its particles (`ParticleType::HorizonFx0` and on): how long
+/// it lives, how it moves and how it looks over its life.
+#[derive(Clone, Copy, Debug)]
+pub struct FxSpec {
+    pub life: i32,
+    pub gravity: f32,
+    pub friction: f32,
+    /// Quad size at birth, and how much of it is added by the end of life.
+    pub size: f32,
+    pub grow: f32,
+    pub fade_in: i32,
+    pub fade_out: i32,
+    /// Opacity at its most.
+    pub alpha: f32,
+    pub rgb: [f32; 3],
+    /// Lies on a surface, turned `yaw` about the vertical.
+    pub flat: bool,
+    pub yaw: f32,
+    /// Stops against blocks.
+    pub collide: bool,
+    /// Drawn at full brightness, whatever the light there.
+    pub glow: bool,
+    /// A fixed path instead of the velocity: it is born `v` from where it is put and by the end
+    /// of its life lies `w` from there, at `start + v * (1 - t) + w * t^4` for the share `t` of
+    /// its life gone.
+    pub path: Option<([f64; 3], [f64; 3])>,
+    /// Drifts like a firefly: now and then picks a new sideways speed and, after a pause, a
+    /// vertical one; goes out if it stops moving or touches ground.
+    pub wander: bool,
+    /// Four upright sprites a quarter of a block out, drawn from both sides.
+    pub boxed: bool,
+    /// Lies on a wall, face pointing this way, turned `yaw` about it.
+    pub facing: Option<[f32; 3]>,
+    /// How many times its sprites run through over its life (1 is once).
+    pub loops: u8,
+    /// One sprite of the engine's table to wear (from a landed leaf), not the slot's own set.
+    pub sprite: Option<u32>,
+}
 /// `ParticleOptions` with the parameters of the option classes used here.
 #[derive(Clone, Debug)]
 pub struct ParticleOptions {
     pub ty: ParticleType,
+    /// `FxSpec` of a native mod's particle.
+    pub fx: Option<FxSpec>,
     /// `BlockParticleOption`: the block's particle sprite and terrain tint.
     pub block: Option<(String, u32)>,
     /// RGB(A) for dust, spells, entity effects and tinted leaves.
@@ -52,6 +92,7 @@ impl ParticleOptions {
     pub fn simple(ty: ParticleType) -> Self {
         Self {
             ty,
+            fx: None,
             block: None,
             color: [1.0; 4],
             scale: 1.0,
@@ -337,6 +378,18 @@ enum DripStage {
 }
 
 /// One live particle (`Particle` + `SingleQuadParticle` state).
+/// `FireflyParticle`'s counters.
+#[derive(Clone, Copy, Debug)]
+struct Wander {
+    x_ticks: i32,
+    x_max: i32,
+    wait: i32,
+    wait_max: i32,
+    up: bool,
+    y_ticks: i32,
+    z_ticks: i32,
+    z_max: i32,
+}
 #[derive(Clone, Debug)]
 pub struct Particle {
     pub ty: ParticleType,
@@ -380,6 +433,15 @@ pub struct Particle {
     yaw: f32,
     /// Ticked once when created (`CritParticle` constructor).
     pre_tick: bool,
+    /// A native mod particle's fixed path: where it starts, `v` and `w` (see `FxSpec::path`).
+    path: Option<([f64; 3], [f64; 3], [f64; 3])>,
+    /// A firefly's wandering: its counters.
+    wander: Option<Wander>,
+    /// Drawn as an upright box of four sprites (see `FxSpec::boxed`).
+    boxed: bool,
+    facing: Option<[f32; 3]>,
+    /// Runs of its sprite set over its life.
+    loops: u8,
     /// `Particle.random`: the particle's own generator (`RandomSource.create()`).
     random: LegacyRandom,
 }
@@ -721,6 +783,11 @@ impl Particle {
             aspect: 1.0,
             yaw: 0.0,
             pre_tick: false,
+            path: None,
+            wander: None,
+            boxed: false,
+            facing: None,
+            loops: 1,
             random: LegacyRandom::new(0),
         }
     }
@@ -859,6 +926,50 @@ impl Particle {
         }
     }
     /// `Particle.tick`.
+    /// `FireflyParticle.tick` after the move: new sideways speeds now and then, a pause and a
+    /// vertical drift, and out when it has stopped or touched the ground.
+    fn wander_tick(&mut self) {
+        let Some(mut w) = self.wander else { return };
+        if self.position[0] != self.previous[0]
+            && !self.on_ground
+            && self.position[2] != self.previous[2]
+        {
+            let around = |r: &mut LegacyRandom, max: f64| {
+                let v = r.next_double() * max;
+                if r.next_boolean() { v } else { -v }
+            };
+            w.x_ticks += 1;
+            if w.x_ticks >= w.x_max {
+                w.x_ticks = 0;
+                w.x_max = self.random.next_int_bound(60).unwrap_or(0);
+                self.velocity[0] = around(&mut self.random, 0.1);
+            }
+            w.wait += 1;
+            if w.wait >= w.wait_max {
+                if !w.up {
+                    self.velocity[1] = around(&mut self.random, 0.05);
+                    w.up = true;
+                }
+                w.y_ticks -= 1;
+                if w.y_ticks <= 0 {
+                    w.up = false;
+                    self.velocity[1] = 0.0;
+                    w.y_ticks = 0;
+                    w.wait = 0;
+                    w.wait_max = 20 + self.random.next_int_bound(20).unwrap_or(0);
+                }
+            }
+            w.z_ticks += 1;
+            if w.z_ticks >= w.z_max {
+                w.z_ticks = 0;
+                w.z_max = self.random.next_int_bound(60).unwrap_or(0);
+                self.velocity[2] = around(&mut self.random, 0.1);
+            }
+            self.wander = Some(w);
+        } else {
+            self.removed = true;
+        }
+    }
     fn base_tick(&mut self, level: &ParticleLevel) {
         self.previous = self.position;
         let age = self.age;
@@ -1052,6 +1163,18 @@ impl ParticleLevel<'_> {
 }
 
 /// `ParticleEngine` plus the sprite sets of `ParticleResources`.
+/// A falling leaf that reached the ground (or water), taken off the particle engine for a mod.
+#[derive(Clone, Debug)]
+pub struct LandedLeaf {
+    pub ty: ParticleType,
+    pub position: [f64; 3],
+    pub velocity: [f64; 3],
+    pub rgb: [f32; 3],
+    pub alpha: f32,
+    pub size: f32,
+    pub roll: f32,
+    pub sprite: u32,
+}
 pub struct ParticleEngine {
     particles: Vec<Particle>,
     pending: Vec<Particle>,
@@ -1079,6 +1202,12 @@ pub struct ParticleEngine {
     pub camera: [f64; 3],
     /// The Particles option (`ParticleStatus`): 0 all, 1 decreased, 2 minimal.
     pub particle_level: u8,
+    /// The positions the game's `animateTick` visited since this was last taken, for native
+    /// mods (`native_animate_tick`).
+    pub animate_visits: Vec<[i32; 3]>,
+    /// A mod wants the leaves that land (they leave the engine at the ground).
+    pub watch_leaves: bool,
+    landed_leaves: Vec<LandedLeaf>,
     /// FireworkParticles.Starter instances.
     starters: Vec<Starter>,
     /// Local sounds requested by particles (dripstone drips): (event, position, volume, pitch).
@@ -1110,6 +1239,9 @@ impl ParticleEngine {
             starters: Vec::new(),
             camera: [0.0; 3],
             particle_level: 0,
+            animate_visits: Vec::new(),
+            watch_leaves: false,
+            landed_leaves: Vec::new(),
             sounds: Vec::new(),
             made: Default::default(),
             item_sprites: HashMap::new(),
@@ -1493,6 +1625,34 @@ impl ParticleEngine {
             self.pending.push(particle);
         }
     }
+    /// The leaves that landed since the last call.
+    pub fn take_landed_leaves(&mut self) -> Vec<LandedLeaf> {
+        std::mem::take(&mut self.landed_leaves)
+    }
+    /// The particles of `types` made since the last tick that have not joined the others yet
+    /// (place in the queue, type, where, how fast), so a native mod can put its own in their
+    /// place.
+    pub fn peek_new(
+        &self,
+        types: &[ParticleType],
+    ) -> Vec<(usize, ParticleType, [f64; 3], [f64; 3])> {
+        self.pending
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| types.contains(&p.ty))
+            .map(|(i, p)| (i, p.ty, p.position, p.velocity))
+            .collect()
+    }
+    /// Removes the new particles at these places (from `peek_new`) before they are shown.
+    pub fn drop_new(&mut self, mut indices: Vec<usize>) {
+        indices.sort_unstable_by(|a, b| b.cmp(a));
+        indices.dedup();
+        for i in indices {
+            if i < self.pending.len() {
+                self.pending.remove(i);
+            }
+        }
+    }
     /// How many particles of each type were made so far.
     pub fn made(&self) -> &std::collections::BTreeMap<&'static str, u64> {
         &self.made
@@ -1595,9 +1755,10 @@ impl ParticleEngine {
             let Some(sprites) = self.set_sprites.get(set as usize) else {
                 return;
             };
-            let lifetime = p.lifetime.max(1);
-            let index = (p.age.max(0) as i64 * (sprites.len() as i64 - 1) / i64::from(lifetime))
-                .clamp(0, sprites.len() as i64 - 1);
+            let lifetime = i64::from(p.lifetime.max(1));
+            let run = (p.age.max(0) as i64 * i64::from(p.loops.max(1))) % lifetime;
+            let index =
+                (run * (sprites.len() as i64 - 1) / lifetime).clamp(0, sprites.len() as i64 - 1);
             p.sprite = Sprite::Index(sprites[index as usize]);
         }
     }
@@ -1638,6 +1799,122 @@ impl ParticleEngine {
                 };
                 q.rgba = [1.0, 1.0, 1.0, if cascade { 0.8 } else { 0.6 }];
                 q.behaviour = Behaviour::Animated;
+                q.set = set;
+                q
+            }
+            T::HorizonFx0
+            | T::HorizonFx1
+            | T::HorizonFx2
+            | T::HorizonFx3
+            | T::HorizonFx4
+            | T::HorizonFx5
+            | T::HorizonFx6
+            | T::HorizonFx7
+            | T::HorizonFx8
+            | T::HorizonFx9
+            | T::HorizonFx10
+            | T::HorizonFx11
+            | T::HorizonFx12
+            | T::HorizonFx13
+            | T::HorizonFx14
+            | T::HorizonFx15
+            | T::HorizonFx16
+            | T::HorizonFx17
+            | T::HorizonFx18
+            | T::HorizonFx19
+            | T::HorizonFx20
+            | T::HorizonFx21
+            | T::HorizonFx22
+            | T::HorizonFx23
+            | T::HorizonFx24
+            | T::HorizonFx25
+            | T::HorizonFx26
+            | T::HorizonFx27
+            | T::HorizonFx28
+            | T::HorizonFx29
+            | T::HorizonFx30
+            | T::HorizonFx31
+            | T::HorizonFx32
+            | T::HorizonFx33
+            | T::HorizonFx34
+            | T::HorizonFx35
+            | T::HorizonFx36
+            | T::HorizonFx37
+            | T::HorizonFx38
+            | T::HorizonFx39
+            | T::HorizonFx40
+            | T::HorizonFx41
+            | T::HorizonFx42
+            | T::HorizonFx43
+            | T::HorizonFx44
+            | T::HorizonFx45
+            | T::HorizonFx46
+            | T::HorizonFx47
+            | T::HorizonFx48
+            | T::HorizonFx49
+            | T::HorizonFx50
+            | T::HorizonFx51
+            | T::HorizonFx52
+            | T::HorizonFx53
+            | T::HorizonFx54
+            | T::HorizonFx55
+            | T::HorizonFx56
+            | T::HorizonFx57
+            | T::HorizonFx58
+            | T::HorizonFx59
+            | T::HorizonFx60
+            | T::HorizonFx61
+            | T::HorizonFx62
+            | T::HorizonFx63 => {
+                // A particle a native mod describes: moves on the velocity given, fades in and
+                // out, grows, and runs through the frames of its sprite set over its life.
+                let fx = o.fx?;
+                let mut q = Particle::at(r, ty, p);
+                q.velocity = v;
+                q.has_physics = fx.collide;
+                q.gravity = fx.gravity;
+                q.friction = fx.friction;
+                q.size = fx.size;
+                q.yaw = fx.yaw;
+                q.flat = fx.flat;
+                q.boxed = fx.boxed;
+                q.facing = fx.facing;
+                q.lifetime = fx.life.max(1);
+                q.rgba = [fx.rgb[0], fx.rgb[1], fx.rgb[2], 0.0];
+                q.behaviour = Behaviour::Fading {
+                    max: fx.alpha,
+                    fade_in: fx.fade_in,
+                    fade_out: fx.fade_out,
+                    size0: fx.size,
+                    grow: fx.grow,
+                };
+                if fx.glow {
+                    q.light = Light::FullBright;
+                }
+                q.loops = fx.loops.max(1);
+                if let Some(i) = fx.sprite {
+                    q.sprite = Sprite::Index(i);
+                    q.set = None;
+                }
+                if fx.wander {
+                    let wait_max = 20 + r.next_int_bound(20).unwrap_or(0);
+                    q.wander = Some(Wander {
+                        x_ticks: 0,
+                        x_max: r.next_int_bound(60).unwrap_or(0),
+                        wait: wait_max,
+                        wait_max,
+                        up: false,
+                        y_ticks: 20,
+                        z_ticks: 0,
+                        z_max: r.next_int_bound(60).unwrap_or(0),
+                    });
+                }
+                if let Some((v, w)) = fx.path {
+                    q.path = Some((p, v, w));
+                    q.velocity = [0.0; 3];
+                    q.position = [p[0] + v[0], p[1] + v[1], p[2] + v[2]];
+                    q.previous = q.position;
+                }
                 q.set = set;
                 q
             }
@@ -3300,6 +3577,32 @@ impl ParticleEngine {
         let mut particles = std::mem::take(&mut self.particles);
         for p in &mut particles {
             self.tick_particle(p, level);
+            if self.watch_leaves
+                && p.on_ground
+                && matches!(
+                    p.ty,
+                    ParticleType::TintedLeaves
+                        | ParticleType::CherryLeaves
+                        | ParticleType::PaleOakLeaves
+                        | ParticleType::OrangePoplarLeaves
+                        | ParticleType::RedPoplarLeaves
+                        | ParticleType::YellowPoplarLeaves
+                )
+                && let Sprite::Index(sprite) = p.sprite
+                && sprite != u32::MAX
+            {
+                self.landed_leaves.push(LandedLeaf {
+                    ty: p.ty,
+                    position: p.position,
+                    velocity: p.velocity,
+                    rgb: [p.rgba[0], p.rgba[1], p.rgba[2]],
+                    alpha: p.rgba[3],
+                    size: p.size,
+                    roll: p.roll,
+                    sprite,
+                });
+                p.removed = true;
+            }
         }
         particles.retain(|p| !p.removed);
         self.particles = particles;
@@ -3345,6 +3648,14 @@ impl ParticleEngine {
                 let rise = (p.age as f32 / fade_in.max(1) as f32).min(1.0);
                 let fall = ((p.lifetime - p.age) as f32 / fade_out.max(1) as f32).clamp(0.0, 1.0);
                 p.rgba[3] = max * rise.min(fall);
+                if p.wander.is_some() {
+                    p.wander_tick();
+                }
+                if let Some((start, v, w)) = p.path {
+                    let t = (p.age as f64 / p.lifetime.max(1) as f64).min(1.0);
+                    let (r, t4) = (1.0 - t, t * t * t * t);
+                    p.position = [0, 1, 2].map(|i| start[i] + v[i] * r + w[i] * t4);
+                }
             }
             Behaviour::Snowflake => {
                 p.base_tick(level);
@@ -4228,20 +4539,56 @@ impl ParticleEngine {
                 r.u0 + du * p.uv[2],
                 r.v0 + dv * p.uv[3],
             );
-            for rotation in rotations.into_iter().flatten() {
-                for (n, uv) in [
+            // Every quad: its turn, how far it sits from the particle, and whether its corners
+            // run the other way round (the far side of a two-sided sprite).
+            let mut quads: Vec<(Quat, FVec3, bool)> = rotations
+                .into_iter()
+                .flatten()
+                .map(|r| (r, FVec3::ZERO, false))
+                .collect();
+            if let Some(n) = p.facing {
+                let n = FVec3::from_array(n).normalize_or_zero();
+                let turn = if n.z < -0.999 {
+                    Quat::from_rotation_y(std::f32::consts::PI)
+                } else {
+                    Quat::from_rotation_arc(FVec3::Z, n)
+                };
+                let rot = turn * Quat::from_rotation_z(p.yaw);
+                quads.clear();
+                quads.push((rot, FVec3::ZERO, false));
+                quads.push((rot, FVec3::ZERO, true));
+            }
+            if p.boxed {
+                let pi = std::f32::consts::PI;
+                quads.clear();
+                for (rot, off) in [
+                    (Quat::IDENTITY, FVec3::new(0.0, 0.0, size)),
+                    (Quat::from_rotation_y(pi / 2.0), FVec3::new(-size, 0.0, 0.0)),
+                    (Quat::from_rotation_y(pi), FVec3::new(0.0, 0.0, -size)),
+                    (Quat::from_rotation_y(-pi / 2.0), FVec3::new(size, 0.0, 0.0)),
+                ] {
+                    quads.push((rot, off, false));
+                    quads.push((rot, off, true));
+                }
+            }
+            for (rotation, offset, reversed) in quads {
+                let mut corners = [
                     ((1.0, -1.0), [u1, v1]),
                     ((1.0, 1.0), [u1, v0]),
                     ((-1.0, 1.0), [u0, v0]),
                     ((-1.0, -1.0), [u0, v1]),
-                ] {
+                ];
+                if reversed {
+                    corners.reverse();
+                }
+                for (n, uv) in corners {
                     // A tall sprite stands on its position: its height runs from 0 up.
                     let up = if p.aspect == 1.0 {
                         n.1
                     } else {
                         (n.1 + 1.0) * p.aspect
                     };
-                    let v = center + rotation * FVec3::new(n.0, up, 0.0) * size;
+                    let v = center + offset + rotation * FVec3::new(n.0, up, 0.0) * size;
                     out.push(Vertex {
                         normal: [0; 4],
                         pos: v.to_array(),

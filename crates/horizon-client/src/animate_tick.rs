@@ -423,6 +423,10 @@ impl AnimateTables {
             .copied()
             .unwrap_or(Animate::None)
     }
+    /// `FireBlock.canBurn`: whether fire can catch on the state.
+    pub fn is_burnable(&self, state: u32) -> bool {
+        self.burnable.get(state as usize).copied().unwrap_or(false)
+    }
     /// Whether a state ticks campfire particles (`CampfireBlockEntity.particleTick`).
     pub fn is_lit_campfire(&self, state: u32) -> bool {
         matches!(self.kind(BlockStateId(state)), Animate::Campfire { .. })
@@ -565,6 +569,7 @@ fn do_animate_tick(
     if !ctx.world.loaded(x, z) {
         return;
     }
+    engine.animate_visits.push(pos);
     let state = ctx.state(pos);
     block_animate_tick(tables, engine, ctx, state, pos, center);
     let facts = ctx.facts.get(state);

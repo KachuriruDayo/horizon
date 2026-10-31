@@ -54,3 +54,21 @@ A clean upstream tree has no API: `native-hooks.json` is missing, `horizon-mixin
 Leaf fluff, dynamic-light gathering, shader/shadow API, LOD cache, upload budget/EcoQoS, audio
 mixer, datafix, thin-block mesher support: they sit in hot paths or need engine internals; mods
 reach them only through the parts above.
+
+## API 25
+
+- `chest-lids` 1: `native_chest_openness(pos)` (0 to 1) and `native_chest_lid(pos, open)`, which opens or closes the lid of a chest on this client alone.
+
+## API 24
+
+- `villager-events` 1: hook `native_villager_work(mob, site, profession, level)`, called when a villager works at its job site (the moment of its work sound).
+
+## API 23
+
+- `station-events` 1: hook `native_station_result(station, pos, item)`, called when the player takes the result of a stonecutter.
+
+## API 22
+
+- `level-events` 1: hook `native_level_event(id, pos, data)`, called for every level event the world reports (anvil 1029/1030, grindstone 1042, smithing table 1044, eye of ender 1503, dispenser 2000, block break 2001). Dispenser events come from `dispenser_event`, the rest from `process_level_events`.
+- `world-read` 7: `native_campfire_items(pos)`, how many things cook on a campfire.
+- `NativeFx.boxed`: four upright sprites a quarter block out from the point, each drawn from both sides (the ring of an eye of ender). `NativeFx.facing`: a sprite lying on a wall, face pointing the given way, turned `yaw` about it, drawn from both sides (the egg splat).

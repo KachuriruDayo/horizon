@@ -364,6 +364,7 @@ impl Game<'_> {
     /// firework shoot, 1018 blaze shoot and 2000 smoke shot out of the front.
     pub(super) fn dispenser_event(&mut self, id: i32, pos: Pos, data: i32) {
         super::dispense_fixture::record(|| format!("L {id} {},{},{} {data}", pos.0, pos.1, pos.2));
+        self.native_level_event(id, [pos.0, pos.1, pos.2], data);
         let c = Self::center(pos);
         match id {
             1000 => self

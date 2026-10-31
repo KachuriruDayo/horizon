@@ -139,6 +139,25 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 }
 
 impl Behaviours {
+    /// `BucketItem.canBlockContainFluid`: whether the block at `pos` is a liquid container (a
+    /// campfire, a slab, a stair...) that takes the fluid of `content`, so the bucket fills the
+    /// block itself and not the space next to it.
+    pub fn bucket_can_contain<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        content: BucketContent,
+    ) -> bool {
+        let fluid = match content {
+            BucketContent::MobWater => FluidKind::Water,
+            BucketContent::Fluid(fluid) => fluid,
+            _ => return false,
+        };
+        let sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        sim.is_liquid_container(state) && sim.can_place_liquid(state, fluid)
+    }
     /// `BucketPickup.pickupBlock` by a dispenser: the filled bucket item.
     pub fn bucket_pickup<L: LevelAccess + ?Sized>(
         &self,

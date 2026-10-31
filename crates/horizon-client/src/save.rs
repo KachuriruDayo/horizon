@@ -4687,6 +4687,7 @@ mod tests {
             cache: Default::default(),
             details: Vec::new(),
             approximate: false,
+            disk: None,
         };
         use crate::streaming::LodSampler;
         sampler.request_detail(&[(-2, 3)], [-32, 48]);

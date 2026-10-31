@@ -3414,6 +3414,16 @@ fn play_work_sound(m: &mut Mob, cx: &mut Bx) {
     if let Some(sound) = super::villager::work_sound(m.extra.variant2) {
         m.voice(sound, cx.events);
     }
+    if let Some(site) = mem(m).job_site.value() {
+        let xp = super::villager::xp(m);
+        let level = 1 + [10, 70, 150, 250].iter().filter(|t| xp >= **t).count() as i32;
+        cx.events.push(MobEvent::Worked {
+            mob: m.id,
+            site,
+            profession: m.extra.variant2,
+            level,
+        });
+    }
 }
 /// `WorkAtPoi.start`'s restock.
 fn restock_if_due(m: &mut Mob, w: &MobWorld) {

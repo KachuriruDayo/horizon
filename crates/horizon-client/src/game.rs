@@ -3505,6 +3505,9 @@ impl Game<'_> {
         self.lan_record_events(&events);
         dispense_fixture::record_events(&events);
         for event in events {
+            if let LevelEvent::LevelEvent { id, pos, data } = &event {
+                self.native_level_event(*id, [pos.x, pos.y, pos.z], *data);
+            }
             match event {
                 LevelEvent::LevelEvent {
                     id: 2001,
@@ -7661,6 +7664,13 @@ impl Game<'_> {
         let carried = menu.carried.take();
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
+        // A stonecutter's result was taken: a native mod may show the cuttings.
+        if sounds.contains(&"minecraft:ui.stonecutter.take_result")
+            && let Some(pos) = self.station.as_ref().map(|s| s.pos)
+        {
+            let item = carried.as_ref().map(|c| c.item.to_string()).unwrap_or_default();
+            self.native_station_result("minecraft:stonecutter", pos, &item);
+        }
         // A bundle's sounds are the player's own (`Entity.playSound`): the
         // client plays them as it clicks, predicting or not.
         for sound in std::mem::take(&mut menu.player_sounds) {
@@ -10623,7 +10633,11 @@ impl Game<'_> {
             if !self.may_build() {
                 return Ok(UseResult::Fail);
             }
-            let target = if self.res.facts().get(clicked).replaceable {
+            // BucketItem.use: a block that can hold the fluid (a campfire, a slab) is filled itself.
+            let hit_pos = BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
+            let holds = self
+                .with_level(|b, level, ticks| b.bucket_can_contain(level, ticks, hit_pos, content));
+            let target = if self.res.facts().get(clicked).replaceable || holds {
                 hit.pos
             } else {
                 [
@@ -15389,8 +15403,9 @@ fn load_resources(
     } else {
         (load_facts(), load_biomes(), load_environment())
     };
-    let (facts, gameplay_projection) =
+    let (mut facts, gameplay_projection) =
         facts.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    Game::native_block_sounds(&mut facts.states);
     let biomes = Arc::new(biomes.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?);
     let environment = environment.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());

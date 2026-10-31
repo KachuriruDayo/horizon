@@ -384,6 +384,11 @@ struct Info {
     leaves: bool,
     blocks_flow: bool,
     ice: bool,
+    /// Stone that only looks like a crossed plant (pointed dripstone): never sways.
+    rigid: bool,
+    /// A flower two blocks tall (sunflower, lilac, rose bush, peony, pitcher plant): its halves
+    /// sway as one.
+    double_flower: bool,
     sturdy: u8,
     /// Occlusion face per direction: 0 empty, 1 the full-block singleton, 2 partial.
     face: [u8; 6],
@@ -550,6 +555,11 @@ impl MeshTables {
                 leaves: s.has_class("LeavesBlock"),
                 blocks_flow: assets.blocks_fluid_flow.contains(&*s.name),
                 ice: s.has_class("IceBlock"),
+                rigid: is_rigid_crossed(name),
+                double_flower: matches!(
+                    name,
+                    "sunflower" | "lilac" | "rose_bush" | "peony" | "pitcher_plant"
+                ),
                 sturdy: s.sturdy_full,
                 face,
                 cover,
@@ -773,6 +783,42 @@ pub fn hdr_tier(name: &str, level: u8) -> u8 {
 /// the wind (`WindInput::weight`): 15 minus the weight in sixteenths, so the usual 0xF means
 /// not at all.
 pub const SWAY_BITS: u32 = 0xF000_0000;
+/// Blocks whose model is crossed (or hangs, or is a thin sheet) but is not a plant, so no wind
+/// moves it: dripstone and crystals, webs, mushrooms and fungi, corals, pickles, lights and
+/// chains, candles, sculk sensors, signs, pots and what sits in them.
+fn is_rigid_crossed(name: &str) -> bool {
+    matches!(
+        name,
+        "pointed_dripstone"
+            | "sulfur_spike"
+            | "amethyst_cluster"
+            | "large_amethyst_bud"
+            | "medium_amethyst_bud"
+            | "small_amethyst_bud"
+            | "cobweb"
+            | "sea_pickle"
+            | "brown_mushroom"
+            | "red_mushroom"
+            | "crimson_fungus"
+            | "warped_fungus"
+            | "campfire"
+            | "soul_campfire"
+            | "brewing_stand"
+            | "sculk_sensor"
+            | "calibrated_sculk_sensor"
+            | "lantern"
+            | "soul_lantern"
+            | "cactus_flower"
+    ) || name.ends_with("_coral")
+        || name.ends_with("_coral_fan")
+        || name.ends_with("_coral_wall_fan")
+        || name.ends_with("_candle")
+        || name.ends_with("_candle_cake")
+        || name.ends_with("chain")
+        || name.ends_with("copper_lantern")
+        || name.ends_with("sign")
+        || name.starts_with("potted_")
+}
 /// `color` marked as swaying with `weight` (0 to 1).
 pub fn with_sway(color: u32, weight: f32) -> u32 {
     let level = (weight.clamp(0.0, 1.0) * 15.0).round() as u32;
@@ -1155,6 +1201,9 @@ impl Mesher<'_> {
     fn plant_stack(&self, pad: &Padded, [x, y, z]: [i32; 3], state: &Info) -> (i32, bool) {
         let info = &self.tables.info;
         let family = |i: &Info| -> Option<u8> {
+            if i.double_flower {
+                return Some(4);
+            }
             if i.solid || i.full || !i.model || i.tint_count == 0 {
                 return None;
             }
@@ -1303,7 +1352,7 @@ impl Mesher<'_> {
         let tint = Self::tint(state, q.tint_index, tints, pos);
         // Crossed plants sway from their base: the vertex's height in its block is its weight
         // (the upper half of tall grass starts halfway).
-        let sways = crossed(&q.positions);
+        let sways = !state.rigid && crossed(&q.positions);
         let (below, stacked) = if sways {
             self.plant_stack(pad, pos, state)
         } else {

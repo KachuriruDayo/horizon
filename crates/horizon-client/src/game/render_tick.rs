@@ -519,9 +519,10 @@ impl Game<'_> {
                 },
             );
         }
+        self.native_new_particles();
         let level = ParticleLevel {
-            world,
-            facts,
+            world: &self.world,
+            facts: self.res.facts(),
             collision: self.collision,
             player: self
                 .player
@@ -529,6 +530,8 @@ impl Game<'_> {
                 .map(|p| ([p.position.x, p.position.y, p.position.z], p.velocity.y)),
         };
         self.particles.tick(&level);
+        let visits = std::mem::take(&mut self.particles.animate_visits);
+        self.native_animate_tick(&visits);
         self.tick_pickups();
         for (name, at, volume, pitch) in std::mem::take(&mut self.particles.sounds) {
             self.audio.play(name, Some(at), volume, pitch);

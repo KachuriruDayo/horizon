@@ -229,9 +229,41 @@ impl Game<'_> {
         let before = [self.stack_in(self.selected).cloned(), self.offhand.clone()];
         let swings = self.swings_started;
         let using = self.using.is_some();
+        // What the click is aimed at, for native mods (`native_use`).
+        let aimed = self.pick().map(|h| {
+            let name = self
+                .native_block(h.pos[0], h.pos[1], h.pos[2])
+                .map(|b| b.name)
+                .unwrap_or_default();
+            (h, name)
+        });
+        let aimed_entity = self.pick_entity_hit().flatten();
         let Some(hand) = self.use_item()? else {
             return Ok(());
         };
+        let used_item = match hand {
+            Hand::Main => &before[0],
+            Hand::Off => &before[1],
+        }
+        .as_ref()
+        .map(|s| s.item.to_string())
+        .unwrap_or_default();
+        let usage = super::native_hooks::NativeUse {
+            item: used_item,
+            main_hand: hand == Hand::Main,
+            pos: aimed.as_ref().map(|(h, _)| h.pos),
+            face: aimed.as_ref().map_or([0; 3], |(h, _)| h.face),
+            point: aimed.as_ref().map_or([0.0; 3], |(h, _)| h.point),
+            block: aimed.as_ref().map(|(_, n)| n.clone()).unwrap_or_default(),
+            block_after: aimed
+                .as_ref()
+                .and_then(|(h, _)| self.native_block(h.pos[0], h.pos[1], h.pos[2]))
+                .map(|b| b.name)
+                .unwrap_or_default(),
+            entity: aimed_entity,
+            props_before: Default::default(),
+        };
+        self.native_use(&usage);
         let (before, after) = match hand {
             Hand::Main => (&before[0], self.stack_in(self.selected).cloned()),
             Hand::Off => (&before[1], self.offhand.clone()),

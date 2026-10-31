@@ -5186,7 +5186,11 @@ impl Game<'_> {
         // Resolve the crosshair once. A passing entity interaction keeps
         // that target and may only fall back to using the item itself.
         let entity = self.entity_targeted();
+        let usage = self.native_use_before();
         horizon_client::interaction_input::use_on_target(&mut RemoteUseWorld(self), entity);
+        if let Some(usage) = usage {
+            self.native_use(&usage);
+        }
     }
 
     /// `Minecraft.startUseItem`'s entity turn for `hand`: Interact goes to

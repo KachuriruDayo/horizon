@@ -142,6 +142,48 @@
       "version": 1,
       "module": "mod-settings",
       "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_slider"
+    },
+    {
+      "name": "block_sounds",
+      "version": 1,
+      "module": "block-sounds",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_sounds"
+    },
+    {
+      "name": "animate_tick",
+      "version": 1,
+      "module": "animate-tick",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_animate_tick"
+    },
+    {
+      "name": "level_event",
+      "version": 1,
+      "module": "level-events",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_level_event"
+    },
+    {
+      "name": "station_result",
+      "version": 1,
+      "module": "station-events",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_station_result"
+    },
+    {
+      "name": "villager_work",
+      "version": 1,
+      "module": "villager-events",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_villager_work"
+    },
+    {
+      "name": "use",
+      "version": 1,
+      "module": "use-events",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_use"
+    },
+    {
+      "name": "new_particles",
+      "version": 1,
+      "module": "particle-swap",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_new_particles"
     }
   ],
   "modules": [
@@ -157,7 +199,7 @@
     },
     {
       "name": "world-read",
-      "version": 3,
+      "version": 7,
       "helpers": [
         "block",
         "block_in_tag",
@@ -171,7 +213,11 @@
         "environment",
         "top_y",
         "chunk_loaded",
-        "falling_water_at"
+        "falling_water_at",
+        "burnable",
+        "player_state",
+        "item_rarity",
+        "campfire_items"
       ]
     },
     {
@@ -198,16 +244,21 @@
     },
     {
       "name": "particles",
-      "version": 1,
+      "version": 4,
       "helpers": [
-        "particle"
+        "particle",
+        "fx",
+        "particle_block",
+        "particle_item",
+        "destroy_effect"
       ]
     },
     {
       "name": "entities-read",
-      "version": 1,
+      "version": 4,
       "helpers": [
-        "movers"
+        "movers",
+        "entities"
       ]
     },
     {
@@ -263,6 +314,69 @@
       "version": 1,
       "helpers": [
         "set_exposure"
+      ]
+    },
+    {
+      "name": "block-sounds",
+      "version": 1,
+      "hooks": [
+        "block_sounds"
+      ]
+    },
+    {
+      "name": "animate-tick",
+      "version": 1,
+      "hooks": [
+        "animate_tick"
+      ]
+    },
+    {
+      "name": "level-events",
+      "version": 1,
+      "hooks": [
+        "level_event"
+      ]
+    },
+    {
+      "name": "station-events",
+      "version": 1,
+      "hooks": [
+        "station_result"
+      ]
+    },
+    {
+      "name": "villager-events",
+      "version": 1,
+      "hooks": [
+        "villager_work"
+      ]
+    },
+    {
+      "name": "use-events",
+      "version": 1,
+      "hooks": [
+        "use"
+      ]
+    },
+    {
+      "name": "particle-swap",
+      "version": 2,
+      "hooks": [
+        "new_particles"
+      ],
+      "helpers": [
+        "peek_particles",
+        "drop_particles",
+        "watch_leaves",
+        "take_landed_leaves"
+      ]
+    },
+    {
+      "name": "chest-lids",
+      "version": 1,
+      "helpers": [
+        "chest_openness",
+        "chest_lid"
       ]
     }
   ]

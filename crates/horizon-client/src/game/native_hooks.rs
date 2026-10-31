@@ -71,7 +71,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 9;
+pub(crate) const NATIVE_HOOKS_API: u32 = 25;
 
 /// The native API's parts and their versions. Each part groups the hook points and helpers of
 /// one area of the game and is versioned on its own: its version is raised when it gains a hook
@@ -81,18 +81,211 @@ pub(crate) const NATIVE_HOOKS_API: u32 = 9;
 #[allow(dead_code)]
 pub(crate) const NATIVE_MODULES: &[(&str, u32)] = &[
     ("player-events", 2),
-    ("world-read", 3),
+    ("world-read", 7),
     ("sound", 1),
     ("audio-layers", 1),
-    ("particles", 1),
-    ("entities-read", 1),
+    ("particles", 4),
+    ("entities-read", 4),
     ("mining", 1),
     ("block-views", 1),
     ("fog", 1),
     ("lights", 1),
     ("mod-settings", 1),
     ("frame-exposure", 1),
+    ("block-sounds", 1),
+    ("animate-tick", 1),
+    ("level-events", 1),
+    ("station-events", 1),
+    ("villager-events", 1),
+    ("use-events", 1),
+    ("particle-swap", 2),
+    ("chest-lids", 1),
 ];
+
+/// A falling leaf that reached the ground (`native_take_landed_leaves`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeLanded {
+    pub at: [f64; 3],
+    pub velocity: [f64; 3],
+    pub rgb: [f32; 3],
+    pub alpha: f32,
+    pub size: f32,
+    /// Its turn about the vertical, in radians.
+    pub roll: f32,
+    /// Its sprite, to wear on a `NativeFx`.
+    pub sprite: u32,
+}
+
+/// A vanilla particle the game just threw (`native_peek_particles`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeMade {
+    /// `smoke`, `large_smoke`, `splash`.
+    pub kind: String,
+    pub at: [f64; 3],
+    pub velocity: [f64; 3],
+    /// Its place in the queue, for `native_drop_particles`.
+    pub index: usize,
+}
+
+/// What the player's right click did (`native_use`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeUse {
+    /// The item in the hand that was used (`minecraft:shears`), or empty.
+    pub item: String,
+    pub main_hand: bool,
+    /// The block aimed at, with the face of it, and its name before the click and after it
+    /// (the world may answer a moment later on a server).
+    pub pos: Option<[i32; 3]>,
+    pub face: [i32; 3],
+    /// Where on the block the click landed.
+    pub point: [f64; 3],
+    pub block: String,
+    pub block_after: String,
+    /// The block's properties (`bites`, `level`) at the click.
+    pub props_before: std::collections::BTreeMap<String, String>,
+    /// The entity aimed at.
+    pub entity: Option<i32>,
+}
+
+/// An entity the player knows of (`native_entities`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeEntity {
+    pub id: u32,
+    /// `minecraft:creeper`, `minecraft:tnt`, `minecraft:end_crystal`, `minecraft:item`,
+    /// `minecraft:falling_block`.
+    pub kind: String,
+    pub position: [f64; 3],
+    pub previous: [f64; 3],
+    pub velocity: [f64; 3],
+    pub width: f32,
+    pub height: f32,
+    pub on_ground: bool,
+    pub in_water: bool,
+    pub in_lava: bool,
+    pub on_fire: bool,
+    pub fall_distance: f32,
+    /// Asleep (villagers and foxes).
+    pub sleeping: bool,
+    pub health: f32,
+    pub max_health: f32,
+    /// Ticks of breath left (300 when full).
+    pub air: i32,
+    /// Ticks spent freezing in powder snow.
+    pub frozen: i32,
+    /// Where the head looks, in degrees (0 faces south), and how high the eyes are above the feet.
+    pub head_yaw: f32,
+    pub head_pitch: f32,
+    pub eye_height: f32,
+    pub baby: bool,
+    /// A panda with the weak gene.
+    pub weak: bool,
+    /// Ticks since it was hurt (above 0 right after), and the ticks of its death.
+    pub hurt_time: i32,
+    pub death_time: i32,
+    /// The item of a dropped item, the block of a falling block.
+    pub item: String,
+    /// What is particular to the kind: a creeper's swell (above 0 when it is lit), a primed
+    /// TNT's fuse, a falling block's state.
+    pub extra: i32,
+}
+
+/// The local player's body (`native_player_state`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativePlayerState {
+    pub health: f32,
+    pub max_health: f32,
+    /// Hunger, 0 to 20.
+    pub food: i32,
+    pub saturation: f32,
+    pub sprinting: bool,
+    pub swimming: bool,
+    pub sneaking: bool,
+    pub on_ground: bool,
+    pub on_fire: bool,
+    pub flying: bool,
+    pub fall_distance: f32,
+    /// Ticks of breath left (300 when full).
+    pub air: i32,
+    /// Ticks spent freezing in powder snow.
+    pub frozen: i32,
+    /// In bed.
+    pub sleeping: bool,
+    /// Hurt a moment ago and not yet able to be hurt again.
+    pub hurt: bool,
+}
+
+/// A particle a mod describes itself (`native_fx`): how long it lives, how it moves and how it
+/// looks over its life. Its sprites are the resource pack's `particles/horizon_fx_<slot>.json`.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NativeFx {
+    /// Ticks to live.
+    pub life: i32,
+    /// Blocks a tick of fall (negative rises) and the share of speed kept each tick.
+    pub gravity: f32,
+    pub friction: f32,
+    /// Quad size at birth, and how much of it is added by the end of life.
+    pub size: f32,
+    pub grow: f32,
+    /// Ticks to fade in and out, and the opacity at its most.
+    pub fade_in: i32,
+    pub fade_out: i32,
+    pub alpha: f32,
+    pub rgb: [f32; 3],
+    /// Lies on a surface, turned `yaw` about the vertical.
+    pub flat: bool,
+    pub yaw: f32,
+    /// Stops against blocks.
+    pub collide: bool,
+    /// Drawn at full brightness, whatever the light there.
+    pub glow: bool,
+    /// A fixed path instead of the velocity: it is born `v` from `at` and by the end of its
+    /// life lies `w` from `at`, at `at + v * (1 - t) + w * t^4` for the share `t` of its life
+    /// gone.
+    pub path: Option<([f64; 3], [f64; 3])>,
+    /// Drifts like a firefly, and goes out when it stops or lands.
+    pub wander: bool,
+    /// Four upright sprites around the point, a quarter of a block out, each drawn from both
+    /// sides (the ring an eye of ender leaves).
+    pub boxed: bool,
+    /// Lies on a wall: the way its face points (a unit vector), turned `yaw` about it; drawn
+    /// from both sides. Instead of `flat`.
+    pub facing: Option<[f32; 3]>,
+    /// How many times its sprites run through over its life.
+    pub loops: u8,
+    /// One sprite to wear (`NativeLanded::sprite`), instead of the slot's own.
+    pub sprite: Option<u32>,
+}
+impl Default for NativeFx {
+    fn default() -> Self {
+        Self {
+            life: 20,
+            gravity: 0.0,
+            friction: 0.98,
+            size: 0.1,
+            grow: 0.0,
+            fade_in: 2,
+            fade_out: 8,
+            alpha: 1.0,
+            rgb: [1.0; 3],
+            flat: false,
+            yaw: 0.0,
+            collide: false,
+            glow: false,
+            path: None,
+            wander: false,
+            boxed: false,
+            facing: None,
+            loops: 1,
+            sprite: None,
+        }
+    }
+}
 
 /// A step of the player (`native_step`): the block stepped on and where the feet are.
 #[allow(dead_code)]
@@ -509,6 +702,43 @@ impl Game<'_> {
     pub(super) fn native_fog(&self, fog: &mut NativeFog) {
         let _ = fog;
     }
+    /// The facts of every block state are loaded and about to be used (no `Game` yet, so this
+    /// takes no `self`): change a state's `sounds` (volume, pitch and the break, step, place,
+    /// hit and fall events). Module `block-sounds` 1.
+    pub(super) fn native_block_sounds(states: &mut [horizon_items::blocks::StateFacts]) {
+        let _ = states;
+    }
+    /// The game has thrown its particles for this tick but not yet shown them: a mod may look at
+    /// them (`native_peek_particles`), drop some (`native_drop_particles`) and play its own instead. Module `particle-swap` 1.
+    pub(super) fn native_new_particles(&mut self) {}
+    /// The player's right click was taken: used an item, or a block or an entity answered it.
+    /// Module `use-events` 1.
+    pub(super) fn native_use(&mut self, usage: &NativeUse) {
+        let _ = usage;
+    }
+    /// The game's `animateTick` visited these block positions this frame (about 1300 around the
+    /// player, picked at random, as vanilla does for the particles of torches and the like): a
+    /// mod looks at the blocks there (`native_block`, `native_state_at`) and spawns its effects.
+    /// Module `animate-tick` 1.
+    pub(super) fn native_animate_tick(&mut self, visited: &[[i32; 3]]) {
+        let _ = visited;
+    }
+    /// The world reports a level event at `pos` (what vanilla's `levelEvent` hears): 1029 an anvil
+    /// breaks, 1030 one is used, 1042 a grindstone, 1044 a smithing table, 1503 an eye of ender is
+    /// placed, 2000 a dispenser shoots, 2001 a block breaks. Module `level-events` 1.
+    pub(super) fn native_level_event(&mut self, id: i32, pos: [i32; 3], data: i32) {
+        let _ = (id, pos, data);
+    }
+    /// The player took the result of a station (`minecraft:stonecutter`) at `pos`; `item` is what
+    /// they got (empty when it went into the inventory). Module `station-events` 1.
+    pub(super) fn native_station_result(&mut self, station: &str, pos: [i32; 3], item: &str) {
+        let _ = (station, pos, item);
+    }
+    /// A villager works at its job site `site` (`farmer`, `mason`...) of the given `level`.
+    /// Module `villager-events` 1.
+    pub(super) fn native_villager_work(&mut self, mob: u32, site: [i32; 3], profession: &str, level: i32) {
+        let _ = (mob, site, profession, level);
+    }
     /// The light sources the dynamic lights gather this frame (the player's, the mobs' and the
     /// dropped items'): remove or change them. Module `lights` 1.
     pub(super) fn native_light_sources(&self, sources: &mut Vec<NativeLightSource>) {
@@ -815,6 +1045,31 @@ impl Game<'_> {
         };
         self.native_engine.thin = wanted;
     }
+    /// How rare an item is: `common`, `uncommon`, `rare` or `epic`. API 19, `world-read` 6.
+    pub(super) fn native_item_rarity(&self, item: &str) -> String {
+        self.item_rarity(item)
+    }
+    /// Whether fire can catch on the block at `x`, `y`, `z` (`FireBlock.canBurn`). API 13,
+    /// `world-read` 4.
+    pub(super) fn native_burnable(&self, x: i32, y: i32, z: i32) -> bool {
+        self.res.animate().is_burnable(self.world.block(x, y, z).0)
+    }
+    /// How far the lid of the chest at `pos` is open, 0 to 1. API 25, `chest-lids` 1.
+    pub(super) fn native_chest_openness(&self, pos: [i32; 3]) -> f32 {
+        self.chest_lid(pos, 1.0)
+    }
+    /// Opens (`true`) or closes the lid of the chest at `pos` on this client alone, as a block
+    /// event for one opener or none. API 25, `chest-lids` 1.
+    pub(super) fn native_chest_lid(&mut self, pos: [i32; 3], open: bool) {
+        self.block_entity_event(pos, 1, i32::from(open));
+    }
+    /// How many things are cooking on the campfire at `pos`. API 22, `world-read` 7.
+    pub(super) fn native_campfire_items(&self, pos: [i32; 3]) -> usize {
+        match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+            Some(horizon_client::containers::BlockEntity::Campfire(c)) => c.items.iter().filter(|i| i.is_some()).count(),
+            _ => 0,
+        }
+    }
     /// The block at `x`, `y`, `z`, or `None` where it is not loaded. Module `world-read` 1.
     pub(super) fn native_block(&self, x: i32, y: i32, z: i32) -> Option<NativeBlock> {
         let state = self.world.block(x, y, z);
@@ -967,6 +1222,387 @@ impl Game<'_> {
         self.particles
             .add_with(&options, at, velocity, always, always);
         true
+    }
+    /// Plays a particle of the mod's own: slot `slot` (0 to 63) names its sprite set, the
+    /// resource pack's `particles/horizon_fx_<slot>.json`; `fx` says how it lives. It starts at
+    /// `at` and moves `velocity` blocks a tick. `always` shows it from any distance. False for
+    /// a slot it does not have. API 11, `particles` 2.
+    pub(super) fn native_fx(
+        &mut self,
+        slot: u8,
+        at: [f64; 3],
+        velocity: [f64; 3],
+        fx: &NativeFx,
+        always: bool,
+    ) -> bool {
+        use horizon_client::particles::{FxSpec, ParticleOptions, ParticleType as T};
+        let Some(ty) = T::fx(slot) else {
+            return false;
+        };
+        let mut options = ParticleOptions::simple(ty);
+        options.fx = Some(FxSpec {
+            life: fx.life,
+            gravity: fx.gravity,
+            friction: fx.friction,
+            size: fx.size,
+            grow: fx.grow,
+            fade_in: fx.fade_in,
+            fade_out: fx.fade_out,
+            alpha: fx.alpha,
+            rgb: fx.rgb,
+            flat: fx.flat,
+            yaw: fx.yaw,
+            collide: fx.collide,
+            glow: fx.glow,
+            path: fx.path,
+            wander: fx.wander,
+            boxed: fx.boxed,
+            facing: fx.facing,
+            loops: fx.loops,
+            sprite: fx.sprite,
+        });
+        self.particles
+            .add_with(&options, at, velocity, always, always);
+        true
+    }
+    /// Plays the vanilla particle `kind` that wears a block's texture (`block`, `falling_dust`,
+    /// `block_crumble`) of the block state `block` (`minecraft:oak_log[axis=y]`, or just a name for
+    /// its default state), at `at`, moving `velocity`. False when there is no such block, particle
+    /// or texture. API 15, `particles` 3.
+    pub(super) fn native_particle_block(
+        &mut self,
+        kind: &str,
+        block: &str,
+        at: [f64; 3],
+        velocity: [f64; 3],
+    ) -> bool {
+        let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) else {
+            return false;
+        };
+        let registry = self.pack.assets.registry;
+        let name = block.split('[').next().unwrap_or(block);
+        let Some(mut state) = registry.default_state(name) else {
+            return false;
+        };
+        if let Some(props) = block.split_once('[').map(|(_, p)| p.trim_end_matches(']')) {
+            let wanted: Vec<(&str, &str)> = props
+                .split(',')
+                .filter_map(|kv| kv.split_once('='))
+                .collect();
+            for id in 0..registry.len() as u32 {
+                let Some(info) = registry.state(horizon_world::registry::BlockStateId(id)) else {
+                    continue;
+                };
+                if info.name == name
+                    && wanted
+                        .iter()
+                        .all(|(k, v)| info.properties.get(*k).is_some_and(|x| x == v))
+                {
+                    state = horizon_world::registry::BlockStateId(id);
+                    break;
+                }
+            }
+        }
+        let Some(sprite) = Self::block_particle_sprite(&self.pack, state) else {
+            return false;
+        };
+        let options = horizon_client::particles::ParticleOptions::block(ty, sprite, 0xFFFFFF);
+        self.particles.add(&options, at, velocity);
+        true
+    }
+    /// The crumbs of the block at `pos` breaking, as vanilla's `addDestroyBlockEffect` throws
+    /// them, for the block `block` (`minecraft:pumpkin`) there. API 15, `particles` 3.
+    pub(super) fn native_destroy_effect(&mut self, pos: [i32; 3], block: &str) -> bool {
+        let Some(state) = self.pack.assets.registry.default_state(block) else {
+            return false;
+        };
+        self.destroy_particles(pos, state);
+        true
+    }
+    /// The vanilla particles of the named kinds that the game threw since the last tick and has
+    /// not yet shown. API 18, `particle-swap` 1.
+    pub(super) fn native_peek_particles(&self, kinds: &[&str]) -> Vec<NativeMade> {
+        let types: Vec<_> = kinds
+            .iter()
+            .filter_map(|k| horizon_client::particles::ParticleType::from_name(k))
+            .collect();
+        self.particles
+            .peek_new(&types)
+            .into_iter()
+            .map(|(index, ty, at, velocity)| NativeMade {
+                kind: ty.name().to_owned(),
+                at,
+                velocity,
+                index,
+            })
+            .collect()
+    }
+    /// Asks the game for the falling leaves that land (it hands them over, off the ground, with
+    /// `native_take_landed_leaves`); say it every tick you want them. API 21, `particle-swap` 2.
+    pub(super) fn native_watch_leaves(&mut self, on: bool) {
+        self.particles.watch_leaves = on;
+    }
+    /// The falling leaves that landed since the last call. API 21, `particle-swap` 2.
+    pub(super) fn native_take_landed_leaves(&mut self) -> Vec<NativeLanded> {
+        self.particles
+            .take_landed_leaves()
+            .into_iter()
+            .map(|l| NativeLanded {
+                at: l.position,
+                velocity: l.velocity,
+                rgb: l.rgb,
+                alpha: l.alpha,
+                size: l.size,
+                roll: l.roll,
+                sprite: l.sprite,
+            })
+            .collect()
+    }
+    /// Takes these particles (`index` of `native_peek_particles`) out before they are shown.
+    /// API 18, `particle-swap` 1.
+    pub(super) fn native_drop_particles(&mut self, indices: Vec<usize>) {
+        self.particles.drop_new(indices);
+    }
+    /// Plays the vanilla item particle (the crumbs of `item`, `minecraft:bone_meal`) at `at`,
+    /// moving `velocity`. False for an item it does not know. API 15, `particles` 3.
+    pub(super) fn native_particle_item(
+        &mut self,
+        item: &str,
+        at: [f64; 3],
+        velocity: [f64; 3],
+    ) -> bool {
+        let stack = horizon_client::items::ItemStack::new(item, 1);
+        let options = self.item_particle(&stack);
+        self.particles.add(&options, at, velocity);
+        true
+    }
+    /// What a right click aims at and holds, to hand to `native_use` once the click is done.
+    pub(super) fn native_use_before(&self) -> Option<NativeUse> {
+        let held = self.held().map(|s| s.item.to_string()).unwrap_or_default();
+        let aimed = self.pick();
+        let found = aimed
+            .as_ref()
+            .and_then(|h| self.native_block(h.pos[0], h.pos[1], h.pos[2]));
+        let props_before = found
+            .as_ref()
+            .map(|b| b.properties.clone())
+            .unwrap_or_default();
+        let name = found.map(|b| b.name).unwrap_or_default();
+        Some(NativeUse {
+            item: held,
+            main_hand: true,
+            pos: aimed.as_ref().map(|h| h.pos),
+            face: aimed.as_ref().map_or([0; 3], |h| h.face),
+            point: aimed.as_ref().map_or([0.0; 3], |h| h.point),
+            block: name.clone(),
+            block_after: name,
+            props_before,
+            entity: self.pick_entity_hit().flatten(),
+        })
+    }
+    /// The mobs, primed TNT, end crystals, falling blocks and dropped items around, with what
+    /// a mod needs to draw effects on them. API 14, `entities-read` 2.
+    pub(super) fn native_entities(&self) -> Vec<NativeEntity> {
+        let v = |p: &horizon_core::geometry::Vec3| [p.x, p.y, p.z];
+        let mut out = Vec::with_capacity(self.mobs.len() + self.tnts.len() + self.crystals.len());
+        for mob in &self.mobs {
+            out.push(NativeEntity {
+                id: mob.id,
+                kind: mob.kind.id.clone(),
+                position: v(&mob.position),
+                previous: v(&mob.previous),
+                velocity: v(&mob.velocity),
+                width: mob.width(),
+                height: mob.height(),
+                on_ground: mob.on_ground,
+                in_water: mob.fluids.in_water,
+                in_lava: mob.fluids.in_lava,
+                on_fire: mob.fire_ticks > 0,
+                fall_distance: mob.fall_distance as f32,
+                head_yaw: mob.head_yaw,
+                head_pitch: mob.head_pitch,
+                eye_height: mob.eye_height() as f32,
+                baby: mob.is_baby(),
+                weak: horizon_client::mobs::panda::is_weak(mob),
+                hurt_time: mob.hurt_time,
+                death_time: mob.death_time,
+                item: String::new(),
+                sleeping: horizon_client::mobs::bat::resting(mob)
+                    || horizon_client::mobs::villager::sleeping(mob)
+                    || (mob.species() == horizon_client::mobs::Species::Fox
+                        && horizon_client::mobs::fox::pose(mob, 0.0).sleeping)
+                    // A cat lying down (`Cat.isLying`).
+                    || (mob.species() == horizon_client::mobs::Species::Cat && mob.extra.flag),
+                health: mob.health,
+                max_health: mob.kind.max_health,
+                air: mob.air,
+                frozen: mob.ticks_frozen,
+                extra: mob.swell,
+            });
+        }
+        for tnt in &self.tnts {
+            out.push(NativeEntity {
+                id: tnt.id,
+                kind: "minecraft:tnt".to_owned(),
+                position: v(&tnt.position),
+                previous: v(&tnt.previous),
+                velocity: v(&tnt.velocity),
+                width: 0.98,
+                height: 0.98,
+                on_ground: tnt.on_ground,
+                in_water: false,
+                in_lava: false,
+                on_fire: false,
+                fall_distance: 0.0,
+                head_yaw: 0.0,
+                head_pitch: 0.0,
+                eye_height: 0.0,
+                baby: false,
+                weak: false,
+                hurt_time: 0,
+                death_time: 0,
+                item: String::new(),
+                sleeping: false,
+                health: 1.0,
+                max_health: 1.0,
+                air: 300,
+                frozen: 0,
+                extra: tnt.fuse,
+            });
+        }
+        for crystal in &self.crystals {
+            out.push(NativeEntity {
+                id: crystal.id,
+                kind: "minecraft:end_crystal".to_owned(),
+                position: v(&crystal.position),
+                previous: v(&crystal.position),
+                velocity: [0.0; 3],
+                width: 2.0,
+                height: 2.0,
+                on_ground: false,
+                in_water: false,
+                in_lava: false,
+                on_fire: false,
+                fall_distance: 0.0,
+                head_yaw: 0.0,
+                head_pitch: 0.0,
+                eye_height: 0.0,
+                baby: false,
+                weak: false,
+                hurt_time: 0,
+                death_time: 0,
+                item: String::new(),
+                sleeping: false,
+                health: 1.0,
+                max_health: 1.0,
+                air: 300,
+                frozen: 0,
+                extra: 0,
+            });
+        }
+        let plain = |id: u32,
+                     kind: &str,
+                     p: &horizon_core::geometry::Vec3,
+                     prev: &horizon_core::geometry::Vec3,
+                     vel: &horizon_core::geometry::Vec3,
+                     size: f32,
+                     ground: bool,
+                     item: String| NativeEntity {
+            id,
+            kind: kind.to_owned(),
+            position: v(p),
+            previous: v(prev),
+            velocity: v(vel),
+            width: size,
+            height: size,
+            on_ground: ground,
+            in_water: false,
+            in_lava: false,
+            on_fire: false,
+            fall_distance: 0.0,
+            head_yaw: 0.0,
+            head_pitch: 0.0,
+            eye_height: 0.0,
+            baby: false,
+            weak: false,
+            hurt_time: 0,
+            death_time: 0,
+            item,
+            sleeping: false,
+            health: 1.0,
+            max_health: 1.0,
+            air: 300,
+            frozen: 0,
+            extra: 0,
+        };
+        for drop in &self.dropped {
+            out.push(plain(
+                drop.id,
+                "minecraft:item",
+                &drop.position,
+                &drop.previous,
+                &drop.velocity,
+                0.25,
+                drop.on_ground,
+                drop.stack.item.to_string(),
+            ));
+        }
+        for p in &self.creatures.projectiles {
+            out.push(plain(
+                p.id,
+                p.kind.id(),
+                &p.position,
+                &p.previous,
+                &p.velocity,
+                p.kind.size() as f32,
+                false,
+                String::new(),
+            ));
+        }
+        for f in &self.falling {
+            let name = self
+                .pack
+                .assets
+                .registry
+                .state(f.state)
+                .map(|s| s.name.clone())
+                .unwrap_or_default();
+            let mut e = plain(
+                f.id,
+                "minecraft:falling_block",
+                &f.position,
+                &f.previous,
+                &f.velocity,
+                0.98,
+                false,
+                name,
+            );
+            e.fall_distance = f.fall_distance as f32;
+            out.push(e);
+        }
+        out
+    }
+    /// The local player's body: health, hunger, sprinting, air. API 16, `world-read` 5.
+    pub(super) fn native_player_state(&self) -> Option<NativePlayerState> {
+        let p = self.player.as_ref()?;
+        Some(NativePlayerState {
+            health: p.health.health(),
+            // The attribute needs a mutable player; the usual 20 hearts-worth stands in.
+            max_health: 20.0,
+            food: p.health.food.food,
+            saturation: p.health.food.saturation,
+            sprinting: p.sprinting,
+            swimming: p.swimming,
+            sneaking: self.native_sneaking(),
+            on_ground: p.ground.on_ground,
+            on_fire: p.fire_ticks > 0,
+            flying: p.flying,
+            fall_distance: p.fall_distance as f32,
+            air: p.air,
+            frozen: p.ticks_frozen,
+            sleeping: self.sleeping.is_some(),
+            hurt: p.health.hurt.cooldown > 0,
+        })
     }
     /// The mobs and boats the player knows of: where they are and were. API 6, `entities-read` 1.
     pub(super) fn native_movers(&self) -> Vec<NativeMover> {

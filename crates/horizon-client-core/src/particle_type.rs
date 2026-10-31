@@ -7,6 +7,14 @@ macro_rules! particle_types {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum ParticleType { $($variant),* }
         impl ParticleType {
+    /// The slot (0 to 63) of a native mod's own particle, `None` for any other type.
+    pub fn fx_slot(self) -> Option<u8> {
+        (self as u32).checked_sub(Self::HorizonFx0 as u32).filter(|&i| i < 64).map(|i| i as u8)
+    }
+    /// The type of a native mod's particle slot.
+    pub fn fx(slot: u8) -> Option<Self> {
+        Self::ALL.get(Self::HorizonFx0 as usize + usize::from(slot)).copied().filter(|t| t.fx_slot() == Some(slot))
+    }
             pub const ALL: &'static [ParticleType] = &[$(ParticleType::$variant),*];
             /// Registry path (`minecraft:<name>`), also the sprite-set file name.
             pub fn name(self) -> &'static str {
@@ -156,6 +164,71 @@ particle_types! {
     HorizonSplashFoam = "horizon_splash_foam",
     HorizonWave = "horizon_wave",
     HorizonWake = "horizon_wake",
+    HorizonFx0 = "horizon_fx_0",
+    HorizonFx1 = "horizon_fx_1",
+    HorizonFx2 = "horizon_fx_2",
+    HorizonFx3 = "horizon_fx_3",
+    HorizonFx4 = "horizon_fx_4",
+    HorizonFx5 = "horizon_fx_5",
+    HorizonFx6 = "horizon_fx_6",
+    HorizonFx7 = "horizon_fx_7",
+    HorizonFx8 = "horizon_fx_8",
+    HorizonFx9 = "horizon_fx_9",
+    HorizonFx10 = "horizon_fx_10",
+    HorizonFx11 = "horizon_fx_11",
+    HorizonFx12 = "horizon_fx_12",
+    HorizonFx13 = "horizon_fx_13",
+    HorizonFx14 = "horizon_fx_14",
+    HorizonFx15 = "horizon_fx_15",
+    HorizonFx16 = "horizon_fx_16",
+    HorizonFx17 = "horizon_fx_17",
+    HorizonFx18 = "horizon_fx_18",
+    HorizonFx19 = "horizon_fx_19",
+    HorizonFx20 = "horizon_fx_20",
+    HorizonFx21 = "horizon_fx_21",
+    HorizonFx22 = "horizon_fx_22",
+    HorizonFx23 = "horizon_fx_23",
+    HorizonFx24 = "horizon_fx_24",
+    HorizonFx25 = "horizon_fx_25",
+    HorizonFx26 = "horizon_fx_26",
+    HorizonFx27 = "horizon_fx_27",
+    HorizonFx28 = "horizon_fx_28",
+    HorizonFx29 = "horizon_fx_29",
+    HorizonFx30 = "horizon_fx_30",
+    HorizonFx31 = "horizon_fx_31",
+    HorizonFx32 = "horizon_fx_32",
+    HorizonFx33 = "horizon_fx_33",
+    HorizonFx34 = "horizon_fx_34",
+    HorizonFx35 = "horizon_fx_35",
+    HorizonFx36 = "horizon_fx_36",
+    HorizonFx37 = "horizon_fx_37",
+    HorizonFx38 = "horizon_fx_38",
+    HorizonFx39 = "horizon_fx_39",
+    HorizonFx40 = "horizon_fx_40",
+    HorizonFx41 = "horizon_fx_41",
+    HorizonFx42 = "horizon_fx_42",
+    HorizonFx43 = "horizon_fx_43",
+    HorizonFx44 = "horizon_fx_44",
+    HorizonFx45 = "horizon_fx_45",
+    HorizonFx46 = "horizon_fx_46",
+    HorizonFx47 = "horizon_fx_47",
+    HorizonFx48 = "horizon_fx_48",
+    HorizonFx49 = "horizon_fx_49",
+    HorizonFx50 = "horizon_fx_50",
+    HorizonFx51 = "horizon_fx_51",
+    HorizonFx52 = "horizon_fx_52",
+    HorizonFx53 = "horizon_fx_53",
+    HorizonFx54 = "horizon_fx_54",
+    HorizonFx55 = "horizon_fx_55",
+    HorizonFx56 = "horizon_fx_56",
+    HorizonFx57 = "horizon_fx_57",
+    HorizonFx58 = "horizon_fx_58",
+    HorizonFx59 = "horizon_fx_59",
+    HorizonFx60 = "horizon_fx_60",
+    HorizonFx61 = "horizon_fx_61",
+    HorizonFx62 = "horizon_fx_62",
+    HorizonFx63 = "horizon_fx_63",
+    // Particles a native mod describes itself (`native_fx`): sixty-four slots, each with its own sprite set.
 }
 impl ParticleType {
     /// `ParticleType.getOverrideLimiter` (`ParticleTypes.register(name, true)`):
@@ -228,6 +301,7 @@ impl ParticleType {
             | Self::TotemOfUndying
             // FlyTowardsPositionParticle: its LifetimeAlpha(0, 0.6, 0.25, 1) is not opaque.
             | Self::VaultConnection => true,
+            t if t.fx_slot().is_some() => true,
             _ => false,
         }
     }
