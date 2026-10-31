@@ -12,6 +12,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 const JIGSAW: &str = "yungsapi:yung_jigsaw";
+const SMALL_NETHER_DUNGEON: &str = "betterdungeons:small_nether_dungeon";
 const ELEMENT: &str = "yungsapi:yung_single_element";
 /// A terrain adaptation that adapts nothing.
 const NO_ADAPTATION: &str = "yungsapi:none";
@@ -31,7 +32,14 @@ fn active(v: &Value, field: &str) -> bool {
 }
 
 /// A `yung_jigsaw` structure: `Some(false)` (carried as it is), else `None`.
-pub(crate) fn upgrade(kind: &str, v: &Value, lost: &mut BTreeMap<String, usize>) -> Option<bool> {
+pub(crate) fn upgrade(kind: &str, v: &mut Value, lost: &mut BTreeMap<String, usize>) -> Option<bool> {
+    // Better Dungeons' small Nether dungeon is a `yung_jigsaw` under a type id of its own: the
+    // same fields (`start_pool`, `start_jigsaw_name`, `size`...).
+    if kind == "structure" && v["type"] == SMALL_NETHER_DUNGEON && v["start_pool"].is_string() {
+        v["type"] = JIGSAW.into();
+        upgrade(kind, v, lost);
+        return Some(true);
+    }
     if kind != "structure" || v["type"] != JIGSAW {
         return None;
     }
@@ -72,20 +80,28 @@ mod tests {
     #[test]
     fn jigsaws_and_elements_are_carried_as_written() {
         let mut lost = BTreeMap::new();
-        let dungeon =
+        let mut dungeon =
             json!({"type": JIGSAW, "start_pool": "a:b", "size": 10, "adapt_noise": false});
-        assert_eq!(upgrade("structure", &dungeon, &mut lost), Some(false));
+        assert_eq!(upgrade("structure", &mut dungeon, &mut lost), Some(false));
         assert!(lost.is_empty());
-        let stronghold = json!({"type": JIGSAW, "max_y": 0,
+        let mut stronghold = json!({"type": JIGSAW, "max_y": 0,
             "enhanced_terrain_adaptation": {"type": "yungsapi:carved"}});
-        assert_eq!(upgrade("structure", &stronghold, &mut lost), Some(false));
+        assert_eq!(upgrade("structure", &mut stronghold, &mut lost), Some(false));
         assert_eq!(lost[&format!("{JIGSAW} max_y")], 1);
         assert_eq!(lost[&format!("{JIGSAW} enhanced_terrain_adaptation")], 1);
         assert_eq!(
-            upgrade("structure", &json!({"type": "minecraft:jigsaw"}), &mut lost),
+            upgrade("structure", &mut json!({"type": "minecraft:jigsaw"}), &mut lost),
             None
         );
-        assert_eq!(upgrade("structure_set", &dungeon, &mut lost), None);
+        assert_eq!(upgrade("structure_set", &mut dungeon, &mut lost), None);
+
+        // The small Nether dungeon is the same jigsaw under another type id.
+        let mut nether = json!({"type": SMALL_NETHER_DUNGEON, "start_pool": "a:b", "size": 10});
+        assert_eq!(upgrade("structure", &mut nether, &mut lost), Some(true));
+        assert_eq!(nether["type"], JIGSAW);
+        // The spider dungeon has no pool: it is built by code, and stays out.
+        let mut spider = json!({"type": "betterdungeons:spider_dungeon"});
+        assert_eq!(upgrade("structure", &mut spider, &mut lost), None);
 
         let mut lost = BTreeMap::new();
         let pile = json!({"element_type": ELEMENT, "name": "loot_pile_0", "max_count": 1,

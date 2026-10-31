@@ -58,9 +58,14 @@ const PIECE_LIMITED_RULES: [&str; 4] = [
     "pools_that_ignore_boundaries",
 ];
 /// Placements that are vanilla's random spread with extra rules.
-const SPREADS: [&str; 2] = [
+const SPREADS: [&str; 5] = [
     "moogs_structures:advanced_random_spread",
     "repurposed_structures:advanced_random_spread",
+    // YUNG's API's spread with an exclusion zone (`enhanced_exclusion_zone`), and the two
+    // add-ons that wrote the same placement under a type of their own.
+    "yungsapi:enhanced_random_spread",
+    "betterdeserttemples:desert_temple",
+    "betterjungletemples:jungle_temple",
 ];
 /// Mo' Structures' placement (`mostructures:type`) takes its spacing and
 /// separation from the mod's config, not its files: the defaults it writes
