@@ -93,6 +93,8 @@ fn info(solid: bool) -> Info {
         sturdy: 0,
         face: [0; 6],
         cover: [0.0; 6],
+        double_flower: false,
+        rigid: false,
     }
 }
 

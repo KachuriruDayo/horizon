@@ -15,9 +15,13 @@ The input is a zip or a folder; nothing is downloaded, and the pack stays on
 your machine (packs are often All Rights Reserved: do not commit or share an
 upgraded copy).
 
-Horizon does not apply a data pack's world generation yet (see
-[the mod browser](mod-browser.md)); the upgraded pack loads in vanilla 26.3,
-and the checks below run it there.
+A world's data packs (`<world>/datapacks`, folders or zips) do change its world
+generation: biomes, noise settings, density functions, features, structures and
+tags are read in pack order over the built-in data, and a `pack.mcmeta`
+`overlays` entry whose format range holds 26.3's data pack format (121) stands over
+the pack's own `data/`, later entries over earlier ones. What the generator does not
+read (a new biome, a pack's old `configured_feature` folders) is listed in the log.
+The upgraded pack also loads in vanilla 26.3, and the checks below run it there.
 
 The command prints what it rewrote, what it could not rewrite faithfully
 (`not faithful`) and the types it does not know (`left as it is`).

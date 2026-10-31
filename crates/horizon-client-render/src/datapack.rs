@@ -16,14 +16,34 @@ pub struct DataPack {
     /// `file/<name>` in `/datapack` and level.dat.
     pub id: String,
     source: Source,
+    /// The `pack.mcmeta` overlay folders that apply to this game's pack format, in order: a
+    /// later one's file wins over an earlier one's, and any over the pack's own `data/`.
+    overlays: Vec<String>,
 }
 enum Source {
     Dir(PathBuf),
     Zip(Box<Zip>),
 }
 impl DataPack {
-    /// Every file path under `prefix` (relative to the pack root).
+    /// Every file path under `prefix` (relative to the pack root), overlays included: an
+    /// overlay's file is listed by the path it replaces.
     fn list(&self, prefix: &str) -> Vec<String> {
+        let mut out = self.list_raw(prefix);
+        if self.overlays.is_empty() {
+            return out;
+        }
+        let mut seen: std::collections::HashSet<String> = out.iter().cloned().collect();
+        for overlay in &self.overlays {
+            for file in self.list_raw(&format!("{overlay}/{prefix}")) {
+                let rel = file[overlay.len() + 1..].to_owned();
+                if seen.insert(rel.clone()) {
+                    out.push(rel);
+                }
+            }
+        }
+        out
+    }
+    fn list_raw(&self, prefix: &str) -> Vec<String> {
         match &self.source {
             Source::Zip(z) => z
                 .names()
@@ -41,9 +61,36 @@ impl DataPack {
     /// `list("data/")` gives them. A folder pack walks only those folders:
     /// the built-in pack holds about 10,000 other data files.
     fn list_kinds(&self, kinds: &[&str]) -> Vec<String> {
+        let mut out = self.list_kinds_in(None, kinds);
+        if self.overlays.is_empty() {
+            return out;
+        }
+        let mut seen: std::collections::HashSet<String> = out.iter().cloned().collect();
+        for overlay in &self.overlays {
+            for rel in self.list_kinds_in(Some(overlay), kinds) {
+                if seen.insert(rel.clone()) {
+                    out.push(rel);
+                }
+            }
+        }
+        out
+    }
+    /// `list_kinds` in the pack's root, or in one overlay folder (paths relative to it).
+    fn list_kinds_in(&self, overlay: Option<&str>, kinds: &[&str]) -> Vec<String> {
         debug_assert!(kinds.is_sorted(), "kinds in walk order");
         let Source::Dir(root) = &self.source else {
-            return self.list("data/");
+            return match overlay {
+                None => self.list_raw("data/"),
+                Some(o) => self
+                    .list_raw(&format!("{o}/data/"))
+                    .into_iter()
+                    .map(|f| f[o.len() + 1..].to_owned())
+                    .collect(),
+            };
+        };
+        let root = &match overlay {
+            Some(o) => root.join(o),
+            None => root.clone(),
         };
         let Ok(entries) = std::fs::read_dir(root.join("data")) else {
             return Vec::new();
@@ -59,6 +106,14 @@ impl DataPack {
         out
     }
     fn read(&self, path: &str) -> Option<Vec<u8>> {
+        for overlay in self.overlays.iter().rev() {
+            if let Some(bytes) = self.read_raw(&format!("{overlay}/{path}")) {
+                return Some(bytes);
+            }
+        }
+        self.read_raw(path)
+    }
+    fn read_raw(&self, path: &str) -> Option<Vec<u8>> {
         match &self.source {
             Source::Zip(z) => z.read(path).ok(),
             Source::Dir(root) => std::fs::read(root.join(path)).ok(),
@@ -97,9 +152,56 @@ impl DataPack {
         DataPack {
             id: "vanilla".into(),
             source: Source::Dir(root.to_path_buf()),
+            overlays: Vec::new(),
         }
     }
 }
+/// The overlay folders of a `pack.mcmeta` (`overlays.entries`) that apply to this game's data
+/// pack format, in the order the file lists them. An entry's range is `min_format` and
+/// `max_format`, or the older `formats` (a number, `[min, max]` or `{min_inclusive,
+/// max_inclusive}`); a format is a number or `[major, minor]`.
+fn overlay_folders(mcmeta: Option<Vec<u8>>) -> Vec<String> {
+    use serde_json::Value;
+    let Some(bytes) = mcmeta else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let bom = char::from_u32(0xfeff).unwrap_or(' ');
+    let Ok(meta) = serde_json::from_str::<Value>(text.trim_start_matches(bom)) else {
+        return Vec::new();
+    };
+    let format = |v: &Value| match v {
+        Value::Number(n) => n.as_i64(),
+        Value::Array(a) => a.first().and_then(Value::as_i64),
+        _ => None,
+    };
+    let game = horizon_core::version::DATA_PACK_FORMAT.0;
+    let mut out = Vec::new();
+    for entry in meta["overlays"]["entries"].as_array().into_iter().flatten() {
+        let Some(directory) = entry["directory"].as_str() else {
+            continue;
+        };
+        let (mut min, mut max) = (format(&entry["min_format"]), format(&entry["max_format"]));
+        if min.is_none() && max.is_none() {
+            match &entry["formats"] {
+                Value::Number(n) => (min, max) = (n.as_i64(), n.as_i64()),
+                Value::Array(a) if a.len() == 2 => (min, max) = (a[0].as_i64(), a[1].as_i64()),
+                Value::Object(o) => {
+                    (min, max) = (
+                        o.get("min_inclusive").and_then(Value::as_i64),
+                        o.get("max_inclusive").and_then(Value::as_i64),
+                    )
+                }
+                _ => {}
+            }
+        }
+        if min.is_none_or(|m| m <= game) && max.is_none_or(|m| game <= m) {
+            out.push(directory.to_owned());
+        }
+    }
+    out
+}
+
 /// The packs in `<world>/datapacks`, sorted by name.
 pub fn discover(world: &Path) -> Vec<DataPack> {
     let Ok(entries) = std::fs::read_dir(world.join("datapacks")) else {
@@ -110,18 +212,24 @@ pub fn discover(world: &Path) -> Vec<DataPack> {
         let name = e.file_name().to_string_lossy().into_owned();
         let path = e.path();
         if path.is_dir() && path.join("pack.mcmeta").exists() {
-            packs.push(DataPack {
+            let mut pack = DataPack {
                 id: format!("file/{name}"),
                 source: Source::Dir(path),
-            });
+                overlays: Vec::new(),
+            };
+            pack.overlays = overlay_folders(pack.read_raw("pack.mcmeta"));
+            packs.push(pack);
         } else if name.ends_with(".zip")
             && let Ok(z) = Zip::open(&path)
             && z.contains("pack.mcmeta")
         {
-            packs.push(DataPack {
+            let mut pack = DataPack {
                 id: format!("file/{name}"),
                 source: Source::Zip(Box::new(z)),
-            });
+                overlays: Vec::new(),
+            };
+            pack.overlays = overlay_folders(pack.read_raw("pack.mcmeta"));
+            packs.push(pack);
         }
     }
     packs.sort_by(|a, b| a.id.cmp(&b.id));
@@ -658,6 +766,45 @@ pub fn worldgen_overrides(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlays_that_fit_the_pack_format_stand_over_the_pack() {
+        let dir = std::env::temp_dir().join(format!("hz-datapack-overlays-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |p: &str, t: &str| {
+            let path = dir.join("datapacks").join("p").join(p);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, t).unwrap();
+        };
+        write(
+            "pack.mcmeta",
+            r#"{"pack":{"pack_format":15},"overlays":{"entries":[
+                {"formats":[26,512],"directory":"new"},
+                {"min_format":1000,"max_format":1001,"directory":"future"},
+                {"formats":[18,26],"directory":"old"},
+                {"formats":{"min_inclusive":121,"max_inclusive":121},"directory":"exact"}]}}"#,
+        );
+        write("data/minecraft/worldgen/noise/cave.json", "base");
+        write("data/minecraft/worldgen/noise/only_base.json", "base");
+        write("new/data/minecraft/worldgen/noise/cave.json", "new");
+        write("new/data/minecraft/worldgen/noise/only_new.json", "new");
+        write("future/data/minecraft/worldgen/noise/cave.json", "future");
+        write("old/data/minecraft/worldgen/noise/cave.json", "old");
+        write("exact/data/minecraft/worldgen/noise/cave.json", "exact");
+        let packs = discover(&dir);
+        assert_eq!(packs[0].overlays, ["new", "exact"]);
+        let (o, _) = worldgen_overrides(&[&packs[0]], |_| true);
+        let noises: Vec<_> = o.entries("noises").collect();
+        assert_eq!(
+            noises,
+            [
+                ("minecraft:cave", "exact"),
+                ("minecraft:only_base", "base"),
+                ("minecraft:only_new", "new")
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn enabled_packs_override_worldgen_in_order() {
